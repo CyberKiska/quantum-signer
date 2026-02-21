@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="base-path" content="%BASE_PATH%" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <title>Quantum Signer</title>
+    <link rel="stylesheet" href="%BASE_PATH%styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div>
+          <div class="header-group">
+            <h1>Quantum Signer</h1>
+            <p class="subtitle">FIPS 204/205<br />Web PQ sign tool</p>
+          </div>
+
+          <nav class="nav-menu" role="tablist">
+            <button class="nav-item active" data-tab="keys"><span class="icon">🔑</span> Keys</button>
+            <button class="nav-item" data-tab="sign"><span class="icon">✍️</span> Sign</button>
+            <button class="nav-item" data-tab="verify"><span class="icon">🛡️</span> Verify</button>
+          </nav>
+        </div>
+
+        <div class="security-context">
+          <div class="context-row">
+            <span>System Status</span>
+            <span class="context-val status-line">
+              <span id="sys-status-dot" class="status-indicator secure"></span>
+              <span id="sys-status-text">Ready</span>
+            </span>
+          </div>
+          <div class="context-row">
+            <span>Public Key</span>
+            <span id="ctx-pub-fp" class="context-val">Not Loaded</span>
+          </div>
+          <div class="context-row">
+            <span>Secret Key</span>
+            <span id="ctx-sec-fp" class="context-val">Not Loaded</span>
+          </div>
+          <div style="margin-top: 1rem; font-size: 0.75rem; color: #718096">
+            Memory-only session.<br />
+            No network calls.<br />
+            <a href="https://github.com/CyberKiska/quantum-signer" target="_blank" rel="noopener noreferrer">Source code</a>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <div id="toast-container" class="toast-container"></div>
+
+        <section id="tab-keys" class="tab-panel module-panel module-keys active">
+          <header style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem">
+            <h2>Key Management</h2>
+            <button id="run-selftest" class="secondary" type="button">Run Self-test</button>
+          </header>
+
+          <div class="panel-grid">
+            <div class="card">
+              <h3>Generate New Identity</h3>
+              <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem">
+                Create a new cryptographic identity in memory.
+                <br /><strong>Warning:</strong> This will overwrite any currently loaded keys.
+              </p>
+
+              <div class="form-group">
+                <label for="keys-suite">Algorithm Suite</label>
+                <select id="keys-suite"></select>
+                <p
+                  id="keys-suite-warning"
+                  class="hint-warning hidden"
+                  style="margin-top: 0.5rem; color: var(--accent-warning); font-size: 0.85rem"
+                ></p>
+              </div>
+
+              <div class="button-group">
+                <button id="keys-generate" class="primary" type="button">Generate Keypair</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <h3>Import Existing Keys</h3>
+              <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem">
+                Load keys from local filesystem.
+              </p>
+
+              <div class="form-group" style="margin-bottom: 1rem">
+                <label for="keys-import-public">Public Key (.pqpk)</label>
+                <input id="keys-import-public" type="file" accept=".pqpk" />
+              </div>
+
+              <div class="form-group">
+                <label for="keys-import-secret">Secret Key (.pqsk)</label>
+                <input id="keys-import-secret" type="file" accept=".pqsk" />
+              </div>
+            </div>
+
+            <div class="card" style="grid-column: 1 / -1">
+              <div style="display: flex; justify-content: space-between; align-items: flex-start">
+                <h3>Active Key Session</h3>
+                <div class="button-group" style="margin-top: 0">
+                  <button id="keys-export-public" class="secondary" type="button" disabled>Export Public</button>
+                  <button id="keys-export-secret" class="secondary" type="button" disabled>Export Secret</button>
+                  <button id="keys-clear" class="danger" type="button">End Session</button>
+                </div>
+              </div>
+
+              <div id="keys-info" class="mono-box" style="margin-top: 1rem; min-height: 120px">
+                No keys loaded in active memory.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-sign" class="tab-panel module-panel module-sign">
+          <header style="margin-bottom: 1.5rem">
+            <h2>Create Detached Signature (.sig)</h2>
+            <p style="color: var(--text-muted)">
+              Select input type, sign with the active secret key and download detached signature.
+            </p>
+          </header>
+
+          <div class="card" style="max-width: 860px">
+            <div class="form-group">
+              <label>Input Type</label>
+              <div style="display: flex; gap: 1rem; align-items: center">
+                <label style="display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; text-transform: none; letter-spacing: normal">
+                  <input id="sign-mode-file" type="radio" name="sign-input-mode" value="file" checked />
+                  File
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; text-transform: none; letter-spacing: normal">
+                  <input id="sign-mode-text" type="radio" name="sign-input-mode" value="text" />
+                  Plain Text
+                </label>
+              </div>
+            </div>
+
+            <div id="sign-file-group" class="form-group">
+              <label for="sign-file">File to Sign</label>
+              <input id="sign-file" type="file" />
+            </div>
+
+            <div id="sign-text-group" class="form-group hidden">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem">
+                <label for="sign-text" style="margin: 0">Plain Text to Sign</label>
+                <button id="sign-text-paste" class="secondary" type="button" style="padding: 0.35rem 0.8rem; font-size: 0.8rem">
+                  Paste from Clipboard
+                </button>
+              </div>
+              <textarea id="sign-text" rows="8" placeholder="Paste text here"></textarea>
+            </div>
+
+            <div class="button-group" style="margin-top: 1.25rem">
+              <button id="sign-execute" class="primary" type="button">Create Signature</button>
+              <button id="sign-reset" class="secondary" type="button">Reset</button>
+              <button id="sign-download" class="primary" type="button" disabled>Download .sig</button>
+            </div>
+
+            <progress id="sign-progress" value="0" max="100" class="hidden" style="margin-top: 1rem; width: 100%"></progress>
+            <div id="sign-progress-label" style="font-size: 0.8rem; color: var(--text-muted); text-align: center"></div>
+
+            <div id="sign-result" class="mono-box" style="margin-top: 1rem">No signature generated yet.</div>
+          </div>
+        </section>
+
+        <section id="tab-verify" class="tab-panel module-panel module-verify">
+          <header style="margin-bottom: 1.5rem">
+            <h2>Verify Detached Signature</h2>
+            <p style="color: var(--text-muted)">
+              Select original file or plain text and `.sig`. Verification uses loaded public key and/or embedded key from signature.
+            </p>
+          </header>
+
+          <div class="panel-grid">
+            <div class="card" style="grid-column: 1 / -1">
+              <div class="form-group">
+                <label>Input Type</label>
+                <div style="display: flex; gap: 1rem; align-items: center">
+                  <label style="display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; text-transform: none; letter-spacing: normal">
+                    <input id="verify-mode-file" type="radio" name="verify-input-mode" value="file" checked />
+                    File
+                  </label>
+                  <label style="display: inline-flex; align-items: center; gap: 0.35rem; margin: 0; text-transform: none; letter-spacing: normal">
+                    <input id="verify-mode-text" type="radio" name="verify-input-mode" value="text" />
+                    Plain Text
+                  </label>
+                </div>
+              </div>
+
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem">
+                <div class="form-group">
+                  <div id="verify-file-group">
+                    <label for="verify-file-input">Original File</label>
+                    <input id="verify-file-input" type="file" />
+                  </div>
+                  <div id="verify-text-group" class="hidden">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem">
+                      <label for="verify-text-input" style="margin: 0">Original Plain Text</label>
+                      <button id="verify-text-paste" class="secondary" type="button" style="padding: 0.35rem 0.8rem; font-size: 0.8rem">
+                        Paste from Clipboard
+                      </button>
+                    </div>
+                    <textarea id="verify-text-input" rows="8" placeholder="Paste text here"></textarea>
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label for="verify-sig-file">Signature File (.sig)</label>
+                  <input id="verify-sig-file" type="file" accept=".sig" />
+                </div>
+              </div>
+
+              <div class="button-group" style="margin-top: 1.25rem">
+                <button id="verify-run" class="primary" type="button">Verify Signature</button>
+              </div>
+
+              <progress id="verify-progress" value="0" max="100" class="hidden" style="margin-top: 1rem; width: 100%"></progress>
+              <div id="verify-progress-label" style="font-size: 0.8rem; color: var(--text-muted); text-align: center"></div>
+            </div>
+
+            <div id="verify-result-card" class="card hidden" style="grid-column: 1 / -1; border-left: 6px solid transparent">
+              <div style="display: flex; gap: 1rem; align-items: start">
+                <div id="verify-icon" style="font-size: 2rem"></div>
+                <div style="flex: 1">
+                  <h3 id="verify-heading" style="margin-bottom: 0.5rem"></h3>
+                  <p id="verify-message" style="margin-bottom: 1rem; color: var(--text-main)"></p>
+
+                  <details>
+                    <summary style="cursor: pointer; color: var(--accent-primary); font-size: 0.9rem; font-weight: 500">
+                      Show Technical Details
+                    </summary>
+                    <div id="verify-details" class="mono-box" style="margin-top: 1rem; font-size: 0.8rem"></div>
+                  </details>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="%BASE_PATH%assets/app.js"></script>
+  </body>
+</html>
