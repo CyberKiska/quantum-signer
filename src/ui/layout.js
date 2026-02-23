@@ -9,17 +9,21 @@ export function setupLayout(state) {
   const statusDot = byId('sys-status-dot');
   const statusText = byId('sys-status-text');
 
+  function activateTab(tabName) {
+    navItems.forEach((item) => item.classList.toggle('active', item.dataset.tab === tabName));
+    panels.forEach((panel) => panel.classList.toggle('active', panel.id === `tab-${tabName}`));
+  }
+
   navItems.forEach((item) => {
     item.addEventListener('click', () => {
-      const target = item.dataset.tab;
-
-      navItems.forEach((n) => n.classList.toggle('active', n === item));
-
-      panels.forEach((panel) => {
-        panel.classList.toggle('active', panel.id === `tab-${target}`);
-      });
+      activateTab(item.dataset.tab);
     });
   });
+
+  function setContextTone(el, tone) {
+    el.classList.remove('status-success', 'status-warning', 'status-muted');
+    el.classList.add(`status-${tone}`);
+  }
 
   function updateSecurityContext() {
     const pub = state.keys.public;
@@ -27,52 +31,60 @@ export function setupLayout(state) {
 
     if (pub) {
       pubKeyFpEl.textContent = `${getSuiteName(pub.suiteId)} / ${pub.fingerprintShort}...`;
-      pubKeyFpEl.style.color = 'var(--accent-success)';
       pubKeyFpEl.title = `SHA3-256: ${pub.fingerprintHex}`;
+      setContextTone(pubKeyFpEl, 'success');
     } else {
       pubKeyFpEl.textContent = 'Not Loaded';
-      pubKeyFpEl.style.color = 'var(--text-muted)';
       pubKeyFpEl.title = '';
+      setContextTone(pubKeyFpEl, 'muted');
     }
 
     if (sec) {
       secKeyFpEl.textContent = `${getSuiteName(sec.suiteId)} / ${sec.fingerprintShort}...`;
-      secKeyFpEl.style.color = 'var(--accent-warning)';
       secKeyFpEl.title = 'Secret key loaded in memory';
+      setContextTone(secKeyFpEl, 'warning');
     } else {
       secKeyFpEl.textContent = 'Not Loaded';
-      secKeyFpEl.style.color = 'var(--text-muted)';
       secKeyFpEl.title = '';
+      setContextTone(secKeyFpEl, 'muted');
     }
 
     if (sec) {
       statusDot.className = 'status-indicator warning';
       statusText.textContent = 'Armed';
-    } else if (pub) {
+      return;
+    }
+
+    if (pub) {
       statusDot.className = 'status-indicator secure';
       statusText.textContent = 'Verify-Ready';
-    } else {
-      statusDot.className = 'status-indicator';
-      statusText.textContent = 'Ready';
+      return;
     }
+
+    statusDot.className = 'status-indicator';
+    statusText.textContent = 'Ready';
   }
 
   const toastContainer = byId('toast-container');
-  window.addEventListener('toast', (e) => {
-    const { type, message } = e.detail;
+  window.addEventListener('toast', (event) => {
+    const { type, message } = event.detail;
     const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
+    toast.className = `toast ${type || 'info'}`;
     toast.textContent = message;
 
-    toastContainer.appendChild(toast);
+    toastContainer.append(toast);
 
     setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateY(20px)';
-      setTimeout(() => toast.remove(), 300);
-    }, 4000);
+      toast.classList.add('fade-out');
+      setTimeout(() => toast.remove(), 220);
+    }, 3500);
   });
 
   window.addEventListener('keys:updated', updateSecurityContext);
   updateSecurityContext();
+
+  return {
+    activateTab,
+    updateSecurityContext,
+  };
 }

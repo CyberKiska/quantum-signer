@@ -1,17 +1,17 @@
 # Quantum Signer
 ## Digital signature tool
 
-Static client-only web app for post-quantum detached signatures (`.sig`) using pure HTML/CSS/JS.
+Static client-only web app for post-quantum detached signatures (`.qsig`) using pure HTML/CSS/JS.
 
-* [Features](#features) | [Architecture](#architecture) | [Development](#development) | [License](#license)
+[Features](#features) | [Architecture](#architecture) | [Development](#development) | [License](#license)
 
 ------------
 
 ## Features
 
 1. Key management: generate/import/export key pairs for ML-DSA and SLH-DSA.
-2. Sign: select a file, create detached signature, download `.sig`.
-3. Verify: select original file + `.sig`, get `VALID`/`INVALID` with technical details.
+2. Sign: select a file, create detached signature, download `.qsig`.
+3. Verify: select original file + `.qsig`, get `VALID`/`INVALID` with technical details.
 
 ------------
 
@@ -37,7 +37,7 @@ Important note:
 - Key/signature lengths are validated against selected suite before signing/verifying.
 - Detached signature format is versioned and parsed defensively.
 
-### Detached signature format (`.sig`)
+### Detached signature format (`.qsig`)
 
 Container includes:
 - `magic` + `version`

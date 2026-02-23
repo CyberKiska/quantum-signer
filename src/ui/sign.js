@@ -111,7 +111,7 @@ export function setupSignTab(state, workerClient) {
 
       state.sign.lastSignature = {
         bytes: result.sigBytes,
-        filename: inputMode === 'file' ? `${file.name}.sig` : 'plain-text.sig',
+        filename: inputMode === 'file' ? `${file.name}.qsig` : 'plain-text.qsig',
       };
 
       resultEl.textContent = [

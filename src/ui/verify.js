@@ -37,7 +37,7 @@ function renderVerifyResult(result) {
   if (result.keyMismatch) {
     lines.push('');
     lines.push('--- KEY MISMATCH WARNING ---');
-    lines.push('The loaded public key does not match the key embedded in .sig.');
+    lines.push('The loaded public key does not match the key embedded in .qsig.');
     lines.push(`Loaded key fingerprint: ${result.loadedKeyFingerprintHex}`);
     lines.push(`Embedded key fingerprint: ${result.embeddedKeyFingerprintHex}`);
     lines.push(`Loaded key verifies: ${result.loadedKeyValid}`);
@@ -45,17 +45,13 @@ function renderVerifyResult(result) {
   }
 
   if (result.computedHashHex) lines.push(`Computed hash: ${result.computedHashHex}`);
-  if (result.providedHashHex) lines.push(`Computed hash: ${result.providedHashHex}`);
+  if (result.providedHashHex) lines.push(`Provided hash: ${result.providedHashHex}`);
   if (result.signedHashHex) lines.push(`Signed hash:   ${result.signedHashHex}`);
 
   if (result.code) lines.push(`Error code: ${result.code}`);
   if (result.warning) lines.push(`Warning: ${result.warning}`);
 
   return lines.join('\n');
-}
-
-function isMismatchButCryptographicallyValid(result) {
-  return result.keyMismatch && (result.loadedKeyValid === true || result.embeddedKeyValid === true);
 }
 
 export function setupVerifyTab(state, workerClient) {
@@ -75,8 +71,23 @@ export function setupVerifyTab(state, workerClient) {
   const resultCard = byId('verify-result-card');
   const resultIcon = byId('verify-icon');
   const resultHeading = byId('verify-heading');
+  const resultBadge = byId('verify-result-badge');
   const resultMessage = byId('verify-message');
   const resultDetails = byId('verify-details');
+
+  function setResultTone(tone, badgeText) {
+    resultCard.classList.remove('valid', 'invalid', 'warning');
+    resultHeading.classList.remove('valid', 'invalid', 'warning');
+
+    resultBadge.className = 'badge neutral';
+    resultBadge.textContent = badgeText;
+
+    if (!tone) return;
+
+    resultCard.classList.add(tone);
+    resultHeading.classList.add(tone);
+    resultBadge.className = `badge ${tone}`;
+  }
 
   function getInputMode() {
     return modeTextEl.checked ? 'text' : 'file';
@@ -101,37 +112,56 @@ export function setupVerifyTab(state, workerClient) {
     resultCard.classList.remove('hidden');
     resultDetails.textContent = renderVerifyResult(result);
 
-    if (isMismatchButCryptographicallyValid(result)) {
+    if (result.keyMismatch) {
+      const loadedValid = result.loadedKeyValid === true;
+      const embeddedValid = result.embeddedKeyValid === true;
+
+      setResultTone('warning', 'WARNING');
       resultIcon.textContent = '⚠️';
-      resultHeading.textContent = 'Key Mismatch Warning';
-      resultHeading.style.color = 'var(--accent-warning)';
-      resultMessage.textContent =
-        'Signature is valid, but loaded and embedded keys differ. Confirm trusted key identity before accepting.';
-      resultCard.style.borderLeftColor = 'var(--accent-warning)';
-      showToast('warning', 'Key mismatch detected');
+      if (loadedValid && embeddedValid) {
+        resultHeading.textContent = 'Key Mismatch Warning';
+        resultMessage.textContent =
+          'Both loaded and embedded keys verify this signature, but they are different keys. Confirm trusted key identity before accepting.';
+        showToast('warning', 'Key mismatch detected');
+        return;
+      }
+
+      if (result.valid) {
+        resultHeading.textContent = 'Signature Valid (Loaded Key)';
+        resultMessage.textContent =
+          'Signature is valid with the loaded public key. Embedded key in .qsig differs and failed verification.';
+        showToast('warning', 'Key mismatch detected');
+        return;
+      }
+
+      setResultTone('invalid', 'INVALID');
+      resultIcon.textContent = '❌';
+      resultHeading.textContent = 'Verification Failed (Key Mismatch)';
+      resultMessage.textContent = embeddedValid
+        ? 'Loaded public key failed verification. Embedded key verifies, but this state is treated as invalid until key identity is trusted.'
+        : 'Verification failed for both loaded and embedded keys.';
+      showToast('error', 'Verification failed');
       return;
     }
 
     if (result.valid) {
+      setResultTone('valid', 'VALID');
       resultIcon.textContent = '✅';
       resultHeading.textContent = 'Signature Valid';
-      resultHeading.style.color = 'var(--accent-success)';
       resultMessage.textContent =
         result.inputKind === 'text'
           ? 'The signature is valid and matches the provided plain text.'
           : 'The signature is valid and matches the selected file.';
-      resultCard.style.borderLeftColor = 'var(--accent-success)';
       showToast('success', 'Verification successful');
       return;
     }
 
+    setResultTone('invalid', 'INVALID');
     resultIcon.textContent = '❌';
     resultHeading.textContent = 'Verification Failed';
-    resultHeading.style.color = 'var(--accent-danger)';
     resultMessage.textContent = result.keyMismatch
       ? 'Verification failed for both loaded and embedded keys.'
       : `The signature is invalid. Error: ${result.code || 'Unknown'}`;
-    resultCard.style.borderLeftColor = 'var(--accent-danger)';
     showToast('error', 'Verification failed');
   }
 
@@ -150,7 +180,7 @@ export function setupVerifyTab(state, workerClient) {
       return;
     }
     if (!sigFile) {
-      showToast('warning', 'Select a signature file (.sig)');
+      showToast('warning', 'Select a signature file (.qsig)');
       return;
     }
 

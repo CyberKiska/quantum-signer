@@ -1,3 +1,21 @@
+/*
+    Quantum Signer
+    Copyright (C) 2026 CyberKiska
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+    
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+    See the GNU Affero General Public License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program. If not, see <https://www.gnu.org/licenses/>.
+*/
+
 import { DEFAULT_SUITE_ID, listSuites } from './crypto/algorithms.js';
 import { wipeBytes } from './crypto/bytes.js';
 import { byId, createWorkerClient, getBasePath, showToast, workerFriendlyError } from './ui/common.js';
@@ -7,7 +25,6 @@ import { setupSignTab } from './ui/sign.js';
 import { setupVerifyTab } from './ui/verify.js';
 
 const state = {
-  locale: 'en',
   keys: {
     public: null,
     secret: null,
@@ -39,7 +56,7 @@ async function main() {
   setupSignTab(state, workerClient);
   setupVerifyTab(state, workerClient);
 
-  const selfTestBtn = byId('run-selftest');
+  const selfTestBtn = byId('sidebar-selftest');
 
   selfTestBtn.addEventListener('click', async () => {
     try {

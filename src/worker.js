@@ -191,7 +191,7 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     return {
       valid: false,
       code: ErrorCode.E_INPUT_REQUIRED,
-      warning: 'No verification key available. Load a public key in Keys, or use a .sig that embeds signer public key.',
+      warning: 'No verification key available. Load a public key in Keys, or use a .qsig that embeds signer public key.',
       ...hashDetails,
       suiteId: parsedSig.suiteId,
       hashAlgId: parsedSig.hashAlgId,
@@ -258,7 +258,7 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     embeddedKeyMatchesLoaded: candidates.embeddedKeyMatchesLoaded,
     warning:
       result.keySource === 'signature'
-        ? 'Verified using public key embedded in .sig. For identity assurance, compare with a trusted key in Keys tab.'
+        ? 'Verified using public key embedded in .qsig. For identity assurance, compare with a trusted key in Keys tab.'
         : null,
   };
 }

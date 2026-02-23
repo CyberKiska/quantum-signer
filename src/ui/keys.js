@@ -316,11 +316,4 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
 
   refreshSuiteWarning();
   updateExportButtons();
-
-  window.addEventListener('keys:updated', () => {
-    const fpEl = document.getElementById('ctx-pub-fp');
-    if (fpEl) {
-      fpEl.title = state.keys.public ? `SHA3-256: ${state.keys.public.fingerprintHex}` : '';
-    }
-  });
 }
