@@ -5,9 +5,15 @@ import {
   generateKeypair,
   getSuite,
   hashBytesSHA3512,
+  hashFileSHA3512,
   signBytes,
   verifyBytes,
 } from './algorithms.js';
+import {
+  MAX_CONTEXT_BYTES,
+  MAX_PAYLOAD_FILE_BYTES,
+  MAX_SIGNATURE_BYTES,
+} from './policy.js';
 import {
   AuthDigestAlgId,
   FingerprintAlgId,
@@ -336,6 +342,88 @@ function buildCases(suites) {
 
       if (!failed) {
         throw new Error('tampered authenticated metadata unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'oversized context bytes must be rejected',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_44);
+      let failed = false;
+      try {
+        signBytes({
+          suiteId: SuiteId.ML_DSA_44,
+          message: textBytes('context-limit'),
+          secretKey: keys.secretKey,
+          hedged: true,
+          contextBytes: new Uint8Array(MAX_CONTEXT_BYTES + 1),
+        });
+      } catch (_err) {
+        failed = true;
+      }
+      if (!failed) {
+        throw new Error('oversized context unexpectedly accepted');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'oversized signature bytes must be rejected',
+    fn: async () => {
+      const signerPublicKey = new Uint8Array(32);
+      const signerFingerprint = packSignerFingerprint({
+        algId: FingerprintAlgId.SHA3_256,
+        digest: computeFingerprintBytes(signerPublicKey),
+      });
+      const authenticatedMetadata = {
+        signerPublicKey,
+        signerFingerprint,
+      };
+      const authMetaBytes = packAuthenticatedMetadataV2(authenticatedMetadata);
+      const authMetaDigest = computeAuthMetaDigestV2(authMetaBytes, AuthDigestAlgId.SHA3_256);
+      let failed = false;
+      try {
+        packSignatureV2({
+          suiteId: SuiteId.ML_DSA_44,
+          signatureProfileId: SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
+          payloadDigestAlgId: HashAlgId.SHA3_512,
+          authDigestAlgId: AuthDigestAlgId.SHA3_256,
+          payloadDigest: new Uint8Array(64),
+          authMetaDigest,
+          signature: new Uint8Array(MAX_SIGNATURE_BYTES + 1),
+          ctx: QSIG_V2_DEFAULT_CTX,
+          authenticatedMetadata,
+          displayMetadata: {},
+        });
+      } catch (_err) {
+        failed = true;
+      }
+      wipeBytes(authMetaBytes);
+      if (!failed) {
+        throw new Error('oversized signature unexpectedly accepted');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'oversized payload file must be rejected',
+    fn: async () => {
+      const oversizedFile = {
+        size: MAX_PAYLOAD_FILE_BYTES + 1,
+        slice() {
+          throw new Error('slice should not be called for oversized input');
+        },
+      };
+
+      let failed = false;
+      try {
+        await hashFileSHA3512(oversizedFile);
+      } catch (_err) {
+        failed = true;
+      }
+      if (!failed) {
+        throw new Error('oversized payload file unexpectedly accepted');
       }
     },
   });

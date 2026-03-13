@@ -1,4 +1,5 @@
 import { getSuiteName } from '../formats/containers.js';
+import { MAX_SIGNATURE_FILE_BYTES } from '../crypto/policy.js';
 import {
   byId,
   readFileAsBytes,
@@ -191,7 +192,7 @@ export function setupVerifyTab(state, workerClient) {
     showToast('info', 'Verifying...');
 
     try {
-      const sigBytes = await readFileAsBytes(sigFile);
+      const sigBytes = await readFileAsBytes(sigFile, { maxBytes: MAX_SIGNATURE_FILE_BYTES, field: 'sigFile' });
       const publicKeyFile = state.keys.public?.fileBytes || null;
 
       let result;

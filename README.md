@@ -37,6 +37,7 @@ Important note:
 - `offline-first`: app works from static files and can be used offline.
 - `keys stay in browser`: keys are memory-resident in session; no server round-trips.
 - Key/signature lengths are validated against selected suite before signing/verifying.
+- Browser-facing inputs are bounded by explicit policy limits for payloads, key files, signature containers, context, and metadata blocks.
 - Detached signature format is versioned and parsed defensively.
 
 ### Detached signature format (`.qsig`)
@@ -93,6 +94,7 @@ Covers:
 - tampered signature (invalid)
 - context mismatch (invalid)
 - tampered authenticated metadata (parse rejection)
+- oversized context/signature/payload inputs (rejected)
 - malformed container parse rejection
 
 Full mode (extra SLH suites):

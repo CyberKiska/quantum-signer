@@ -1,4 +1,5 @@
 import { bytesToHexLower } from '../formats/encoding.js';
+import { assertFileSizeLimit } from '../crypto/policy.js';
 
 export function byId(id) {
   const node = document.getElementById(id);
@@ -10,8 +11,11 @@ export function showToast(type, message) {
   window.dispatchEvent(new CustomEvent('toast', { detail: { type, message } }));
 }
 
-export function readFileAsBytes(file) {
+export function readFileAsBytes(file, { maxBytes, field = 'file' } = {}) {
   if (!file) return Promise.resolve(null);
+  if (Number.isInteger(maxBytes)) {
+    assertFileSizeLimit(file, maxBytes, field);
+  }
   return file.arrayBuffer().then((buf) => new Uint8Array(buf));
 }
 

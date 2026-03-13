@@ -13,6 +13,9 @@ import {
   unpackSecretKeyV1,
 } from '../formats/containers.js';
 import {
+  MAX_KEY_FILE_BYTES,
+} from '../crypto/policy.js';
+import {
   byId,
   downloadBytes,
   readFileAsBytes,
@@ -219,7 +222,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     if (!file) return;
 
     try {
-      const bytes = await readFileAsBytes(file);
+      const bytes = await readFileAsBytes(file, { maxBytes: MAX_KEY_FILE_BYTES, field: 'publicKeyFile' });
       const parsed = unpackPublicKeyV1(bytes);
       assertKeyLength(parsed.suiteId, parsed.keyBytes, 'public');
 
@@ -252,7 +255,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     if (!file) return;
 
     try {
-      const bytes = await readFileAsBytes(file);
+      const bytes = await readFileAsBytes(file, { maxBytes: MAX_KEY_FILE_BYTES, field: 'secretKeyFile' });
       const parsed = unpackSecretKeyV1(bytes);
       assertKeyLength(parsed.suiteId, parsed.keyBytes, 'secret');
 

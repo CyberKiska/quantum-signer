@@ -16,6 +16,14 @@ import {
 } from './crypto/algorithms.js';
 import { ErrorCode, createError, normalizeError } from './crypto/errors.js';
 import {
+  MAX_KEY_FILE_BYTES,
+  MAX_PAYLOAD_FILE_BYTES,
+  MAX_SIGNATURE_FILE_BYTES,
+  MAX_TEXT_INPUT_BYTES,
+  assertBytesLimit,
+  assertFileSizeLimit,
+} from './crypto/policy.js';
+import {
   AuthDigestAlgId,
   FingerprintAlgId,
   HashAlgId,
@@ -134,6 +142,7 @@ function resolveVerificationCandidates(parsedSig, publicKeyFile) {
 
   let loaded = null;
   if (publicKeyFile instanceof Uint8Array) {
+    assertBytesLimit(publicKeyFile, MAX_KEY_FILE_BYTES, 'publicKeyFile');
     const parsedPublic = unpackPublicKeyV1(publicKeyFile);
     validateSignatureAndKeySuites(parsedSig.suiteId, parsedPublic.suiteId);
     loaded = {
@@ -272,6 +281,7 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
 
 async function handleHashFile(id, payload) {
   validateRequired(payload.file, 'file');
+  assertFileSizeLimit(payload.file, MAX_PAYLOAD_FILE_BYTES, 'file');
   const hashBytes = await hashFileSHA3512(payload.file, {
     chunkSize: payload.chunkSize,
     onProgress: (loaded, total) => sendProgress(id, WorkerMessageType.HASH_FILE, loaded, total),
@@ -289,6 +299,7 @@ async function handleHashText(_id, payload) {
     throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'text' });
   }
   const textBytes = new TextEncoder().encode(payload.text);
+  assertBytesLimit(textBytes, MAX_TEXT_INPUT_BYTES, 'text');
   const hashBytes = hashBytesSHA3512(textBytes);
   return {
     hashAlgId: HashAlgId.SHA3_512,
@@ -325,6 +336,7 @@ async function handleKeygen(_id, payload) {
 
 async function handleSign(id, payload) {
   validateRequired(payload.secretKeyFile, 'secretKeyFile');
+  assertBytesLimit(payload.secretKeyFile, MAX_KEY_FILE_BYTES, 'secretKeyFile');
 
   const parsedSecret = unpackSecretKeyV1(payload.secretKeyFile);
   const suite = getSuite(parsedSecret.suiteId);
@@ -339,6 +351,7 @@ async function handleSign(id, payload) {
 
   try {
     if (payload.file) {
+      assertFileSizeLimit(payload.file, MAX_PAYLOAD_FILE_BYTES, 'file');
       inputKind = 'file';
       inputLength = Number(payload.file.size || 0);
       fileHash = await hashFileSHA3512(payload.file, {
@@ -349,6 +362,7 @@ async function handleSign(id, payload) {
     } else if (typeof payload.text === 'string') {
       inputKind = 'text';
       const textBytes = new TextEncoder().encode(payload.text);
+      assertBytesLimit(textBytes, MAX_TEXT_INPUT_BYTES, 'text');
       inputLength = textBytes.length;
       fileHash = hashBytesSHA3512(textBytes);
       metadataInput = defaultMetadataFromText(textBytes);
@@ -432,6 +446,8 @@ async function handleSign(id, payload) {
 async function handleVerifyFile(id, payload) {
   validateRequired(payload.file, 'file');
   validateRequired(payload.sigFile, 'sigFile');
+  assertFileSizeLimit(payload.file, MAX_PAYLOAD_FILE_BYTES, 'file');
+  assertBytesLimit(payload.sigFile, MAX_SIGNATURE_FILE_BYTES, 'sigFile');
 
   const parsedSig = unpackSignatureV2(payload.sigFile);
   assertSignatureLength(parsedSig.suiteId, parsedSig.signature);
@@ -473,10 +489,12 @@ async function handleVerifyText(_id, payload) {
   if (typeof payload.text !== 'string') {
     throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'text' });
   }
+  assertBytesLimit(payload.sigFile, MAX_SIGNATURE_FILE_BYTES, 'sigFile');
 
   const parsedSig = unpackSignatureV2(payload.sigFile);
   assertSignatureLength(parsedSig.suiteId, parsedSig.signature);
   const textBytes = new TextEncoder().encode(payload.text);
+  assertBytesLimit(textBytes, MAX_TEXT_INPUT_BYTES, 'text');
   const providedHashBytes = hashBytesSHA3512(textBytes);
 
   const providedHashHex = bytesToHexLower(providedHashBytes);

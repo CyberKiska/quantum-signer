@@ -1,6 +1,17 @@
 import { sha3_256 } from '@noble/hashes/sha3.js';
 import { ErrorCode, createError } from '../crypto/errors.js';
 import { equalsBytes } from '../crypto/bytes.js';
+import {
+  MAX_AUTH_METADATA_BYTES,
+  MAX_CONTEXT_BYTES,
+  MAX_DISPLAY_METADATA_BYTES,
+  MAX_KEY_BYTES,
+  MAX_KEY_FILE_BYTES,
+  MAX_SIGNATURE_BYTES,
+  MAX_SIGNATURE_FILE_BYTES,
+  assertBytesLimit,
+  assertMaxLength,
+} from '../crypto/policy.js';
 import { bytesToHexLower, bytesToUtf8, utf8ToBytes } from './encoding.js';
 
 export const FORMAT_VERSION_MAJOR = 1;
@@ -99,6 +110,7 @@ const U16_MAX = 0xffff;
 const U8_MAX = 0xff;
 const U64_MAX = 0xffffffffffffffffn;
 const ISO_8601_Z_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
+const MAX_V1_METADATA_BYTES = MAX_AUTH_METADATA_BYTES + MAX_DISPLAY_METADATA_BYTES;
 
 function concatBytes(arrays) {
   let total = 0;
@@ -417,6 +429,7 @@ export function packAuthenticatedMetadataV2(metadata = {}) {
     signerFingerprint: metadata.signerFingerprint,
   };
   const bytes = buildMetadataTLV(authMetadata);
+  assertMaxLength(bytes.length, MAX_AUTH_METADATA_BYTES, 'authMetaLen', ErrorCode.E_FORMAT_LENGTH);
   const records = decodeTLVBlock(bytes);
   ensureOnlyAllowedTags(records, new Set([MetadataTag.SIGNER_PUBLIC_KEY, MetadataTag.SIGNER_FINGERPRINT]), 'authMeta');
   const parsed = parseMetadata(records);
@@ -433,6 +446,7 @@ export function packDisplayMetadataV2(metadata = {}) {
     createdAt: metadata.createdAt,
   };
   const bytes = buildMetadataTLV(displayMetadata);
+  assertMaxLength(bytes.length, MAX_DISPLAY_METADATA_BYTES, 'displayMetaLen', ErrorCode.E_FORMAT_LENGTH);
   const records = decodeTLVBlock(bytes);
   ensureOnlyAllowedTags(records, new Set([MetadataTag.FILENAME, MetadataTag.FILESIZE, MetadataTag.CREATED_AT]), 'displayMeta');
   return bytes;
@@ -440,13 +454,13 @@ export function packDisplayMetadataV2(metadata = {}) {
 
 export function computeAuthMetaDigestV2(authMetaBytes, authDigestAlgId = AuthDigestAlgId.SHA3_256) {
   ensureAuthDigestAlgIdSupported(authDigestAlgId);
-  ensureUint8Array(authMetaBytes, ErrorCode.E_FORMAT_TLV, 'authMetaBytes');
+  assertBytesLimit(authMetaBytes, MAX_AUTH_METADATA_BYTES, 'authMetaBytes', ErrorCode.E_FORMAT_LENGTH);
   return sha3_256(authMetaBytes);
 }
 
 function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDigest) {
   ensureAuthDigestAlgIdSupported(authDigestAlgId);
-  ensureUint8Array(authMetaBytes, ErrorCode.E_FORMAT_TLV, 'authMetaBytes');
+  assertBytesLimit(authMetaBytes, MAX_AUTH_METADATA_BYTES, 'authMetaBytes', ErrorCode.E_FORMAT_LENGTH);
   ensureLength(expectedDigest, AUTH_META_DIGEST_LENGTH, ErrorCode.E_FORMAT_TLV, 'authMetaDigest');
 
   const records = decodeTLVBlock(authMetaBytes);
@@ -465,7 +479,7 @@ function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDi
 }
 
 function parseDisplayMetadataV2(displayMetaBytes) {
-  ensureUint8Array(displayMetaBytes, ErrorCode.E_FORMAT_TLV, 'displayMetaBytes');
+  assertBytesLimit(displayMetaBytes, MAX_DISPLAY_METADATA_BYTES, 'displayMetaBytes', ErrorCode.E_FORMAT_LENGTH);
   const records = decodeTLVBlock(displayMetaBytes);
   ensureOnlyAllowedTags(records, new Set([MetadataTag.FILENAME, MetadataTag.FILESIZE, MetadataTag.CREATED_AT]), 'displayMeta');
   return parseMetadata(records);
@@ -553,6 +567,7 @@ export function buildTBSV1({ formatVerMajor, formatVerMinor, suiteId, hashAlgId,
   ensureLength(fileHash, FILE_HASH_LENGTH, ErrorCode.E_FORMAT_LENGTH, 'fileHash');
 
   const context = ctxBytes || new Uint8Array();
+  assertMaxLength(context.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
   ensureU8(context.length, 'ctxLen');
 
   const out = new Uint8Array(4 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + context.length + FILE_HASH_LENGTH);
@@ -635,6 +650,7 @@ export function packSignatureV2({
   ensureUint8Array(signature, ErrorCode.E_FORMAT_LENGTH, 'signature');
 
   const ctxBytes = ctx ? utf8ToBytes(ctx) : new Uint8Array();
+  assertMaxLength(ctxBytes.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
   ensureU8(ctxBytes.length, 'ctxLen');
   if (ctxBytes.length === 0) {
     throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'ctx', reason: 'required' });
@@ -647,6 +663,9 @@ export function packSignatureV2({
   }
 
   const displayMetaBytes = packDisplayMetadataV2(displayMetadata);
+  assertMaxLength(authMetaBytes.length, MAX_AUTH_METADATA_BYTES, 'authMetaLen', ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(displayMetaBytes.length, MAX_DISPLAY_METADATA_BYTES, 'displayMetaLen', ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(signature.length, MAX_SIGNATURE_BYTES, 'sigLen', ErrorCode.E_FORMAT_LENGTH);
   ensureU16(authMetaBytes.length, 'authMetaLen');
   ensureU16(displayMetaBytes.length, 'displayMetaLen');
   ensureU32(signature.length, 'sigLen');
@@ -656,6 +675,7 @@ export function packSignatureV2({
 
   const headerLen = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + AUTH_META_DIGEST_LENGTH + 1 + 1 + 2 + 2 + 4;
   const totalLen = headerLen + ctxBytes.length + authMetaBytes.length + displayMetaBytes.length + signature.length;
+  assertMaxLength(totalLen, MAX_SIGNATURE_FILE_BYTES, 'sigBytes', ErrorCode.E_FORMAT_LENGTH);
   const out = new Uint8Array(totalLen);
   const view = new DataView(out.buffer);
 
@@ -694,7 +714,7 @@ export function packSignatureV2({
 }
 
 export function unpackSignatureV2(sigBytes) {
-  ensureUint8Array(sigBytes, ErrorCode.E_FORMAT_LENGTH, 'sigBytes');
+  assertBytesLimit(sigBytes, MAX_SIGNATURE_FILE_BYTES, 'sigBytes', ErrorCode.E_FORMAT_LENGTH);
   const minLen = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + AUTH_META_DIGEST_LENGTH + 1 + 1 + 2 + 2 + 4;
   if (sigBytes.length < minLen) {
     throw createError(ErrorCode.E_FORMAT_LENGTH, { minLen, actual: sigBytes.length });
@@ -740,6 +760,9 @@ export function unpackSignatureV2(sigBytes) {
   const authMetaLen = reader.u16(ErrorCode.E_FORMAT_TLV);
   const displayMetaLen = reader.u16(ErrorCode.E_FORMAT_TLV);
   const sigLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(authMetaLen, MAX_AUTH_METADATA_BYTES, 'authMetaLen', ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(displayMetaLen, MAX_DISPLAY_METADATA_BYTES, 'displayMetaLen', ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(sigLen, MAX_SIGNATURE_BYTES, 'sigLen', ErrorCode.E_FORMAT_LENGTH);
   const expectedRemaining = ctxLen + authMetaLen + displayMetaLen + sigLen;
   if (reader.remaining() !== expectedRemaining) {
     throw createError(ErrorCode.E_FORMAT_LENGTH, {
@@ -749,6 +772,7 @@ export function unpackSignatureV2(sigBytes) {
   }
 
   const ctxBytes = reader.take(ctxLen, ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(ctxBytes.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
   if (ctxBytes.length === 0) {
     throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'ctx', reason: 'required' });
   }
@@ -836,9 +860,12 @@ export function packSignatureV1({
   unpackSignerFingerprint(metadata.signerFingerprint);
 
   const ctxBytes = ctx ? utf8ToBytes(ctx) : new Uint8Array();
+  assertMaxLength(ctxBytes.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
   ensureU8(ctxBytes.length, 'ctxLen');
 
   const metadataBytes = buildMetadataTLV(metadata);
+  assertMaxLength(metadataBytes.length, MAX_V1_METADATA_BYTES, 'metaLen', ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(signature.length, MAX_SIGNATURE_BYTES, 'sigLen', ErrorCode.E_FORMAT_LENGTH);
   ensureU16(metadataBytes.length, 'metaLen');
   ensureU32(signature.length, 'sigLen');
 
@@ -847,6 +874,7 @@ export function packSignatureV1({
 
   const headerLen = 4 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + 1 + 1 + 2 + 4;
   const totalLen = headerLen + ctxBytes.length + metadataBytes.length + signature.length;
+  assertMaxLength(totalLen, MAX_SIGNATURE_FILE_BYTES, 'sigBytes', ErrorCode.E_FORMAT_LENGTH);
   const out = new Uint8Array(totalLen);
   const view = new DataView(out.buffer);
 
@@ -877,7 +905,7 @@ export function packSignatureV1({
 }
 
 export function unpackSignatureV1(sigBytes) {
-  ensureUint8Array(sigBytes, ErrorCode.E_FORMAT_LENGTH, 'sigBytes');
+  assertBytesLimit(sigBytes, MAX_SIGNATURE_FILE_BYTES, 'sigBytes', ErrorCode.E_FORMAT_LENGTH);
   const minLen = 4 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + 1 + 1 + 2 + 4;
   if (sigBytes.length < minLen) {
     throw createError(ErrorCode.E_FORMAT_LENGTH, { minLen, actual: sigBytes.length });
@@ -915,6 +943,8 @@ export function unpackSignatureV1(sigBytes) {
 
   const metaLen = reader.u16(ErrorCode.E_FORMAT_LENGTH);
   const sigLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(metaLen, MAX_V1_METADATA_BYTES, 'metaLen', ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(sigLen, MAX_SIGNATURE_BYTES, 'sigLen', ErrorCode.E_FORMAT_LENGTH);
 
   const expectedRemaining = ctxLen + metaLen + sigLen;
   if (reader.remaining() !== expectedRemaining) {
@@ -925,6 +955,7 @@ export function unpackSignatureV1(sigBytes) {
   }
 
   const ctxBytes = reader.take(ctxLen, ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(ctxBytes.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
   const metaBytes = reader.take(metaLen, ErrorCode.E_FORMAT_TLV);
   const signature = reader.take(sigLen, ErrorCode.E_FORMAT_LENGTH);
 
@@ -985,6 +1016,7 @@ function buildKeyFile({ magic, suiteId, keyBytes, versionMajor, versionMinor }) 
   ensureU8(versionMinor, 'versionMinor');
   ensureSuiteIdSupported(suiteId);
   ensureUint8Array(keyBytes, ErrorCode.E_FORMAT_LENGTH, 'keyBytes');
+  assertMaxLength(keyBytes.length, MAX_KEY_BYTES, 'keyLen', ErrorCode.E_FORMAT_LENGTH);
   ensureU32(keyBytes.length, 'keyLen');
 
   const headerLen = 4 + 1 + 1 + 1 + 1 + 4;
@@ -1004,13 +1036,14 @@ function buildKeyFile({ magic, suiteId, keyBytes, versionMajor, versionMinor }) 
 
   const crc = crc32(withoutCrc);
   const out = new Uint8Array(withoutCrc.length + 4);
+  assertMaxLength(out.length, MAX_KEY_FILE_BYTES, 'keyFileLen', ErrorCode.E_FORMAT_LENGTH);
   out.set(withoutCrc, 0);
   new DataView(out.buffer).setUint32(withoutCrc.length, crc, true);
   return out;
 }
 
 function parseKeyFile(bytes, expectedMagic) {
-  ensureUint8Array(bytes, ErrorCode.E_FORMAT_LENGTH, 'keyFile');
+  assertBytesLimit(bytes, MAX_KEY_FILE_BYTES, 'keyFile', ErrorCode.E_FORMAT_LENGTH);
 
   const minLen = 4 + 1 + 1 + 1 + 1 + 4 + 4;
   if (bytes.length < minLen) {
@@ -1038,6 +1071,7 @@ function parseKeyFile(bytes, expectedMagic) {
   }
 
   const keyLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
+  assertMaxLength(keyLen, MAX_KEY_BYTES, 'keyLen', ErrorCode.E_FORMAT_LENGTH);
   const expectedTotal = 4 + 1 + 1 + 1 + 1 + 4 + keyLen + 4;
   if (bytes.length !== expectedTotal) {
     throw createError(ErrorCode.E_FORMAT_LENGTH, { expectedTotal, actual: bytes.length });

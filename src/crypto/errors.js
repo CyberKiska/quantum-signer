@@ -1,5 +1,6 @@
 export const ErrorCode = Object.freeze({
   E_INPUT_REQUIRED: 'E_INPUT_REQUIRED',
+  E_INPUT_TOO_LARGE: 'E_INPUT_TOO_LARGE',
   E_HASH_HEX_INVALID: 'E_HASH_HEX_INVALID',
   E_FORMAT_MAGIC: 'E_FORMAT_MAGIC',
   E_FORMAT_VERSION: 'E_FORMAT_VERSION',
@@ -18,6 +19,7 @@ export const ErrorCode = Object.freeze({
 
 const MESSAGES = {
   [ErrorCode.E_INPUT_REQUIRED]: 'Required input is missing.',
+  [ErrorCode.E_INPUT_TOO_LARGE]: 'Input exceeds the configured size limit.',
   [ErrorCode.E_HASH_HEX_INVALID]: 'Invalid SHA3-512 hash format (expected 128 hex chars).',
   [ErrorCode.E_FORMAT_MAGIC]: 'Invalid file magic header.',
   [ErrorCode.E_FORMAT_VERSION]: 'Unsupported file format version.',

@@ -6,6 +6,13 @@ import {
   slh_dsa_shake_256s,
 } from '@noble/post-quantum/slh-dsa.js';
 import { ErrorCode, createError } from './errors.js';
+import {
+  DEFAULT_HASH_CHUNK_SIZE,
+  MAX_CONTEXT_BYTES,
+  MAX_PAYLOAD_FILE_BYTES,
+  assertFileSizeLimit,
+  normalizeChunkSize,
+} from './policy.js';
 import { HashAlgId, SuiteId } from '../formats/containers.js';
 import {
   assertCondition,
@@ -154,9 +161,9 @@ export function getPublicKeyFromSecret(suiteId, secretKey) {
 function normalizeContextBytes(contextBytes) {
   if (contextBytes === undefined || contextBytes === null) return undefined;
   validateBytes(contextBytes, 'contextBytes', 0);
-  assertCondition(contextBytes.length <= 255, ErrorCode.E_FORMAT_LENGTH, {
+  assertCondition(contextBytes.length <= MAX_CONTEXT_BYTES, ErrorCode.E_FORMAT_LENGTH, {
     field: 'contextBytesLength',
-    max: 255,
+    max: MAX_CONTEXT_BYTES,
     actual: contextBytes.length,
   });
   return contextBytes;
@@ -189,10 +196,12 @@ export function verifyBytes({ suiteId, message, signature, publicKey, contextByt
   return suite.signer.verify(signature, message, publicKey, opts);
 }
 
-export async function hashFileSHA3512(file, { chunkSize = 4 * 1024 * 1024, onProgress } = {}) {
+export async function hashFileSHA3512(file, { chunkSize = DEFAULT_HASH_CHUNK_SIZE, onProgress } = {}) {
   if (!file || typeof file.size !== 'number' || typeof file.slice !== 'function') {
     throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'file' });
   }
+  assertFileSizeLimit(file, MAX_PAYLOAD_FILE_BYTES);
+  const effectiveChunkSize = normalizeChunkSize(chunkSize, DEFAULT_HASH_CHUNK_SIZE);
 
   const hasher = sha3_512.create();
   const total = file.size;
@@ -204,7 +213,7 @@ export async function hashFileSHA3512(file, { chunkSize = 4 * 1024 * 1024, onPro
 
   let offset = 0;
   while (offset < total) {
-    const end = Math.min(offset + chunkSize, total);
+    const end = Math.min(offset + effectiveChunkSize, total);
     const chunk = file.slice(offset, end);
     const chunkBytes = new Uint8Array(await chunk.arrayBuffer());
     hasher.update(chunkBytes);
