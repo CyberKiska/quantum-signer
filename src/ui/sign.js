@@ -89,7 +89,7 @@ export function setupSignTab(state, workerClient) {
       showToast('info', slowSuite ? 'Signing... (this may take time)' : 'Signing...');
 
       const payload = {
-        secretKeyFile: state.keys.secret.fileBytes,
+        secretSessionHandle: state.keys.secret.sessionHandle,
       };
       if (inputMode === 'file') payload.file = file;
       else payload.text = text;

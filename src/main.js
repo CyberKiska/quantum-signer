@@ -36,11 +36,8 @@ const state = {
 
 function wipeStateBytes(appState) {
   const pub = appState.keys.public;
-  const sec = appState.keys.secret;
   if (pub?.keyBytes) wipeBytes(pub.keyBytes);
   if (pub?.fileBytes) wipeBytes(pub.fileBytes);
-  if (sec?.keyBytes) wipeBytes(sec.keyBytes);
-  if (sec?.fileBytes) wipeBytes(sec.fileBytes);
   if (appState.sign.lastSignature?.bytes) wipeBytes(appState.sign.lastSignature.bytes);
 }
 

@@ -3,6 +3,7 @@ import {
   bytesToHexLower,
   computeFingerprintBytes,
   generateKeypair,
+  getPublicKeyFromSecret,
   getSuite,
   hashBytesSHA3512,
   hashFileSHA3512,
@@ -14,6 +15,7 @@ import {
   MAX_PAYLOAD_FILE_BYTES,
   MAX_SIGNATURE_BYTES,
 } from './policy.js';
+import { createSecretSessionManager } from './secret-session.js';
 import {
   AuthDigestAlgId,
   FingerprintAlgId,
@@ -424,6 +426,51 @@ function buildCases(suites) {
       }
       if (!failed) {
         throw new Error('oversized payload file unexpectedly accepted');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'secret session export must round-trip',
+    fn: async () => {
+      const manager = createSecretSessionManager();
+      const session = manager.generateSession(SuiteId.ML_DSA_65);
+      const exported = manager.exportSecretKeyFile(session.sessionHandle);
+      const parsedSecret = unpackSecretKeyV1(exported);
+      const parsedPublic = unpackPublicKeyV1(session.publicKeyFile);
+      const derivedPublic = getPublicKeyFromSecret(parsedSecret.suiteId, parsedSecret.keyBytes);
+
+      const sameSuite = parsedSecret.suiteId === parsedPublic.suiteId;
+      const samePublic = bytesToHexLower(derivedPublic) === bytesToHexLower(parsedPublic.keyBytes);
+
+      wipeBytes(parsedSecret.keyBytes);
+      wipeBytes(derivedPublic);
+      manager.clearAllSessions();
+
+      if (!sameSuite || !samePublic) {
+        throw new Error('exported secret key did not round-trip to stored public key');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'cleared secret session must reject access',
+    fn: async () => {
+      const manager = createSecretSessionManager();
+      const session = manager.generateSession(SuiteId.ML_DSA_44);
+      const cleared = manager.clearSession(session.sessionHandle);
+
+      let failed = false;
+      try {
+        manager.getSession(session.sessionHandle);
+      } catch (_err) {
+        failed = true;
+      }
+
+      manager.clearAllSessions();
+
+      if (!cleared || !failed) {
+        throw new Error('cleared secret session remained accessible');
       }
     },
   });

@@ -35,7 +35,7 @@ Important note:
 
 - `no network`: no runtime fetch/XHR/WebSocket/analytics/CDN.
 - `offline-first`: app works from static files and can be used offline.
-- `keys stay in browser`: keys are memory-resident in session; no server round-trips.
+- `keys stay in browser`: public key data lives in UI session; secret key bytes are isolated in a dedicated worker session with no server round-trips.
 - Key/signature lengths are validated against selected suite before signing/verifying.
 - Browser-facing inputs are bounded by explicit policy limits for payloads, key files, signature containers, context, and metadata blocks.
 - Detached signature format is versioned and parsed defensively.

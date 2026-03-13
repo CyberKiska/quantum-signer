@@ -3,11 +3,8 @@ import {
   QSIG_V2_DEFAULT_CTX,
   assertSignatureLength,
   bytesToHexLower,
-  computeFingerprint,
   computeFingerprintBytes,
   computeFingerprintHex,
-  generateKeypair,
-  getPublicKeyFromSecret,
   getSuite,
   hashBytesSHA3512,
   hashFileSHA3512,
@@ -31,13 +28,10 @@ import {
   buildTBSV2,
   computeAuthMetaDigestV2,
   getHashName,
-  packPublicKeyV1,
-  packSecretKeyV1,
   packAuthenticatedMetadataV2,
   packSignatureV2,
   packSignerFingerprint,
   unpackPublicKeyV1,
-  unpackSecretKeyV1,
   unpackSignatureV2,
   unpackSignerFingerprint,
 } from './formats/containers.js';
@@ -48,10 +42,14 @@ import {
 } from './crypto/validate.js';
 import { runSelfTest } from './crypto/selftest.js';
 import { equalsBytes, wipeBytes } from './crypto/bytes.js';
+import { createSecretSessionManager } from './crypto/secret-session.js';
 
 export const WorkerMessageType = Object.freeze({
   HASH_FILE: 'HASH_FILE',
   KEYGEN: 'KEYGEN',
+  IMPORT_SECRET: 'IMPORT_SECRET',
+  EXPORT_SECRET: 'EXPORT_SECRET',
+  CLEAR_SECRET_SESSION: 'CLEAR_SECRET_SESSION',
   SIGN: 'SIGN',
   VERIFY_FILE: 'VERIFY_FILE',
   VERIFY_TEXT: 'VERIFY_TEXT',
@@ -59,10 +57,15 @@ export const WorkerMessageType = Object.freeze({
   SELFTEST: 'SELFTEST',
 });
 
+const secretSessions = createSecretSessionManager();
+
 const Handlers = {
   [WorkerMessageType.HASH_FILE]: handleHashFile,
   [WorkerMessageType.HASH_TEXT]: handleHashText,
   [WorkerMessageType.KEYGEN]: handleKeygen,
+  [WorkerMessageType.IMPORT_SECRET]: handleImportSecret,
+  [WorkerMessageType.EXPORT_SECRET]: handleExportSecret,
+  [WorkerMessageType.CLEAR_SECRET_SESSION]: handleClearSecretSession,
   [WorkerMessageType.SIGN]: handleSign,
   [WorkerMessageType.VERIFY_FILE]: handleVerifyFile,
   [WorkerMessageType.VERIFY_TEXT]: handleVerifyText,
@@ -107,6 +110,18 @@ function sendProgress(id, op, loaded, total, extra = null) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+async function readBinaryInput(value, field, maxBytes) {
+  if (value instanceof Uint8Array) {
+    assertBytesLimit(value, maxBytes, field);
+    return Uint8Array.from(value);
+  }
+  if (value && typeof value.arrayBuffer === 'function' && typeof value.size === 'number') {
+    assertFileSizeLimit(value, maxBytes, field);
+    return new Uint8Array(await value.arrayBuffer());
+  }
+  throw createError(ErrorCode.E_INPUT_REQUIRED, { field });
 }
 
 function defaultMetadataFromFile(file) {
@@ -312,34 +327,52 @@ async function handleHashText(_id, payload) {
 async function handleKeygen(_id, payload) {
   const suiteId = payload.suiteId ?? DEFAULT_SUITE_ID;
   const suite = getSuite(suiteId);
-  const keys = generateKeypair(suiteId);
+  const session = secretSessions.generateSession(suiteId);
+  return {
+    suiteId,
+    suiteName: suite.name,
+    ...session,
+  };
+}
 
+async function handleImportSecret(_id, payload) {
+  const secretKeyFile = await readBinaryInput(payload.secretKeyFile, 'secretKeyFile', MAX_KEY_FILE_BYTES);
   try {
-    const publicKeyFile = packPublicKeyV1({ suiteId, keyBytes: keys.publicKey });
-    const secretKeyFile = packSecretKeyV1({ suiteId, keyBytes: keys.secretKey });
-
+    const session = secretSessions.importSecretKeyFile(secretKeyFile);
+    const suite = getSuite(session.suiteId);
     return {
-      suiteId,
+      suiteId: session.suiteId,
       suiteName: suite.name,
-      publicKeyLength: keys.publicKey.length,
-      secretKeyLength: keys.secretKey.length,
-      fingerprintShort: computeFingerprint(keys.publicKey, 8),
-      fingerprintHex: computeFingerprintHex(keys.publicKey),
-      publicKeyFile,
-      secretKeyFile,
+      ...session,
     };
   } finally {
-    wipeBytes(keys.publicKey);
-    wipeBytes(keys.secretKey);
+    wipeBytes(secretKeyFile);
   }
 }
 
-async function handleSign(id, payload) {
-  validateRequired(payload.secretKeyFile, 'secretKeyFile');
-  assertBytesLimit(payload.secretKeyFile, MAX_KEY_FILE_BYTES, 'secretKeyFile');
+async function handleExportSecret(_id, payload) {
+  if (typeof payload.secretSessionHandle !== 'string' || payload.secretSessionHandle.length === 0) {
+    throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'secretSessionHandle' });
+  }
+  const secretKeyFile = secretSessions.exportSecretKeyFile(payload.secretSessionHandle);
+  return { secretKeyFile };
+}
 
-  const parsedSecret = unpackSecretKeyV1(payload.secretKeyFile);
-  const suite = getSuite(parsedSecret.suiteId);
+async function handleClearSecretSession(_id, payload) {
+  const handle = payload?.secretSessionHandle;
+  if (handle !== undefined && handle !== null && typeof handle !== 'string') {
+    throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'secretSessionHandle' });
+  }
+  return {
+    cleared: typeof handle === 'string' ? secretSessions.clearSession(handle) : false,
+  };
+}
+
+async function handleSign(id, payload) {
+  validateRequired(payload.secretSessionHandle, 'secretSessionHandle');
+
+  const session = secretSessions.getSession(payload.secretSessionHandle);
+  const suite = getSuite(session.suiteId);
 
   let fileHash;
   let authMetaBytes = null;
@@ -375,7 +408,7 @@ async function handleSign(id, payload) {
     const payloadDigestAlgId = HashAlgId.SHA3_512;
     const authDigestAlgId = AuthDigestAlgId.SHA3_256;
 
-    signerPublicKey = getPublicKeyFromSecret(parsedSecret.suiteId, parsedSecret.keyBytes);
+    signerPublicKey = Uint8Array.from(session.publicKey);
     signerFingerprintDigest = computeFingerprintBytes(signerPublicKey);
     const signerFingerprintHex = bytesToHexLower(signerFingerprintDigest);
     const signerFingerprint = packSignerFingerprint({
@@ -392,7 +425,7 @@ async function handleSign(id, payload) {
     const authMetaDigest = computeAuthMetaDigestV2(authMetaBytes, authDigestAlgId);
 
     const tbs = buildTBSV2({
-      suiteId: parsedSecret.suiteId,
+      suiteId: session.suiteId,
       signatureProfileId,
       payloadDigestAlgId,
       authDigestAlgId,
@@ -401,15 +434,15 @@ async function handleSign(id, payload) {
     });
 
     const signature = signBytes({
-      suiteId: parsedSecret.suiteId,
+      suiteId: session.suiteId,
       message: tbs,
-      secretKey: parsedSecret.keyBytes,
+      secretKey: session.secretKey,
       hedged: true,
       contextBytes: ctxBytes,
     });
 
     const sigBytes = packSignatureV2({
-      suiteId: parsedSecret.suiteId,
+      suiteId: session.suiteId,
       signatureProfileId,
       payloadDigestAlgId,
       authDigestAlgId,
@@ -425,7 +458,7 @@ async function handleSign(id, payload) {
       valid: true,
       inputKind,
       inputLength,
-      suiteId: parsedSecret.suiteId,
+      suiteId: session.suiteId,
       suiteName: suite.name,
       hashAlgId: payloadDigestAlgId,
       hashAlgName: getHashName(payloadDigestAlgId),
@@ -436,7 +469,6 @@ async function handleSign(id, payload) {
       sigBytes,
     };
   } finally {
-    wipeBytes(parsedSecret.keyBytes);
     if (signerPublicKey) wipeBytes(signerPublicKey);
     if (signerFingerprintDigest) wipeBytes(signerFingerprintDigest);
     if (authMetaBytes) wipeBytes(authMetaBytes);

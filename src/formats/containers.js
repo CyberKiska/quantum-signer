@@ -109,7 +109,6 @@ const U32_MAX = 0xffffffff;
 const U16_MAX = 0xffff;
 const U8_MAX = 0xff;
 const U64_MAX = 0xffffffffffffffffn;
-const ISO_8601_Z_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/;
 const MAX_V1_METADATA_BYTES = MAX_AUTH_METADATA_BYTES + MAX_DISPLAY_METADATA_BYTES;
 
 function concatBytes(arrays) {
@@ -241,11 +240,7 @@ function normalizeIso8601(value) {
     if (Number.isNaN(ts)) {
       throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid' });
     }
-    const iso = new Date(ts).toISOString();
-    if (!ISO_8601_Z_RE.test(iso)) {
-      throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_non_iso' });
-    }
-    return iso;
+    return new Date(ts).toISOString();
   }
   if (typeof value === 'number' || typeof value === 'bigint') {
     const seconds = Number(value);

@@ -2,15 +2,12 @@ import {
   assertKeyLength,
   computeFingerprint,
   computeFingerprintHex,
-  getPublicKeyFromSecret,
 } from '../crypto/algorithms.js';
 import { equalsBytes, wipeBytes } from '../crypto/bytes.js';
 import {
   getSuiteName,
   packPublicKeyV1,
-  packSecretKeyV1,
   unpackPublicKeyV1,
-  unpackSecretKeyV1,
 } from '../formats/containers.js';
 import {
   MAX_KEY_FILE_BYTES,
@@ -28,6 +25,7 @@ const KEYGEN_TIMEOUT_MS = Object.freeze({
   ML_DSA: 60_000,
   SLH_DSA: 300_000,
 });
+const SECRET_SESSION_TIMEOUT_MS = 60_000;
 
 const SLH_WARNING_TEXT = 'SLH-DSA generation is computationally intensive. It may take several minutes on mobile devices.';
 
@@ -49,9 +47,9 @@ function formatKeyInfo(state) {
   if (state.keys.secret) {
     lines.push(`SECRET KEY [${getSuiteName(state.keys.secret.suiteId)}]`);
     lines.push(`Fingerprint (SHA3-256): ${state.keys.secret.fingerprintHex}`);
-    lines.push(`Size: ${state.keys.secret.keyBytes.length} bytes`);
+    lines.push(`Size: ${state.keys.secret.secretKeyLength} bytes`);
     lines.push(`Exported: ${state.keys.secret.exported ? 'YES' : 'NO'}`);
-    lines.push('Warning: Secret key is in memory. Do not leave unattended.');
+    lines.push('Warning: Secret key is isolated in worker session. Browser memory hygiene remains best-effort.');
   }
 
   return lines.join('\n');
@@ -61,7 +59,7 @@ function notifyKeysUpdated(state) {
   window.dispatchEvent(new CustomEvent('keys:updated', { detail: state.keys }));
 }
 
-function wipeKeyEntry(entry, { wipeContainer = false } = {}) {
+function wipePublicEntry(entry, { wipeContainer = false } = {}) {
   if (!entry) return;
   wipeBytes(entry.keyBytes);
   if (wipeContainer && entry.fileBytes) {
@@ -69,62 +67,57 @@ function wipeKeyEntry(entry, { wipeContainer = false } = {}) {
   }
 }
 
-function wipeStoredKeys(state) {
-  wipeKeyEntry(state.keys.public, { wipeContainer: true });
-  wipeKeyEntry(state.keys.secret, { wipeContainer: true });
-}
-
 function createPublicEntry(parsed, { exported = true } = {}) {
   assertKeyLength(parsed.suiteId, parsed.keyBytes, 'public');
+  const keyBytes = Uint8Array.from(parsed.keyBytes);
   return {
     suiteId: parsed.suiteId,
-    keyBytes: parsed.keyBytes,
-    fileBytes: packPublicKeyV1({ suiteId: parsed.suiteId, keyBytes: parsed.keyBytes }),
-    fingerprintShort: computeFingerprint(parsed.keyBytes, 8),
-    fingerprintHex: computeFingerprintHex(parsed.keyBytes),
+    keyBytes,
+    fileBytes: packPublicKeyV1({ suiteId: parsed.suiteId, keyBytes }),
+    fingerprintShort: computeFingerprint(keyBytes, 8),
+    fingerprintHex: computeFingerprintHex(keyBytes),
     exported,
   };
 }
 
-function createSecretEntry(parsed, { exported = true } = {}) {
-  assertKeyLength(parsed.suiteId, parsed.keyBytes, 'secret');
-  const derivedPublic = getPublicKeyFromSecret(parsed.suiteId, parsed.keyBytes);
+function createSecretSessionEntry(result, { exported = true } = {}) {
   return {
-    entry: {
-      suiteId: parsed.suiteId,
-      keyBytes: parsed.keyBytes,
-      fileBytes: packSecretKeyV1({ suiteId: parsed.suiteId, keyBytes: parsed.keyBytes }),
-      fingerprintShort: computeFingerprint(derivedPublic, 8),
-      fingerprintHex: computeFingerprintHex(derivedPublic),
-      exported,
-    },
-    derivedPublic,
+    sessionHandle: result.sessionHandle,
+    suiteId: result.suiteId,
+    secretKeyLength: result.secretKeyLength,
+    fingerprintShort: result.fingerprintShort,
+    fingerprintHex: result.fingerprintHex,
+    exported,
   };
 }
 
 function setPublicKey(state, parsed, options = {}) {
-  wipeKeyEntry(state.keys.public, { wipeContainer: true });
+  wipePublicEntry(state.keys.public, { wipeContainer: true });
   state.keys.public = createPublicEntry(parsed, options);
 }
 
-function setSecretKey(state, parsed, options = {}) {
-  wipeKeyEntry(state.keys.secret, { wipeContainer: true });
-  const secret = createSecretEntry(parsed, options);
-  state.keys.secret = secret.entry;
-  return secret.derivedPublic;
+function applySecretSessionIdentity(state, result, options = {}) {
+  const parsedPublic = unpackPublicKeyV1(result.publicKeyFile);
+  setPublicKey(state, parsedPublic, options);
+  state.keys.secret = createSecretSessionEntry(result, options);
 }
 
-function setIdentityFromSecret(state, parsedSecret, { exported = true } = {}) {
-  const derivedPublic = setSecretKey(state, parsedSecret, { exported });
-  setPublicKey(
-    state,
-    {
-      suiteId: parsedSecret.suiteId,
-      keyBytes: derivedPublic,
-    },
-    { exported }
+async function clearSecretSession(workerClient, sessionHandle) {
+  if (!sessionHandle) return false;
+  const result = await workerClient.call(
+    'CLEAR_SECRET_SESSION',
+    { secretSessionHandle: sessionHandle },
+    { timeoutMs: SECRET_SESSION_TIMEOUT_MS }
   );
-  return derivedPublic;
+  return result?.cleared === true;
+}
+
+async function replaceSecretSession(state, workerClient, result, options = {}) {
+  const previousHandle = state.keys.secret?.sessionHandle || null;
+  applySecretSessionIdentity(state, result, options);
+  if (previousHandle && previousHandle !== result.sessionHandle) {
+    await clearSecretSession(workerClient, previousHandle);
+  }
 }
 
 export function populateSuiteSelect(selectEl, suites, defaultSuiteId) {
@@ -199,13 +192,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
         { suiteId },
         { timeoutMs: slowSuite ? KEYGEN_TIMEOUT_MS.SLH_DSA : KEYGEN_TIMEOUT_MS.ML_DSA }
       );
-
-      const parsedPub = unpackPublicKeyV1(result.publicKeyFile);
-      const parsedSec = unpackSecretKeyV1(result.secretKeyFile);
-      const derivedPublic = setIdentityFromSecret(state, parsedSec, { exported: false });
-      if (!equalsBytes(parsedPub.keyBytes, derivedPublic)) {
-        throw new Error('Public key mismatch with generated secret key');
-      }
+      await replaceSecretSession(state, workerClient, result, { exported: false });
 
       syncUi();
       showToast('success', `Identity created: ${result.suiteName}`);
@@ -227,9 +214,11 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
       assertKeyLength(parsed.suiteId, parsed.keyBytes, 'public');
 
       if (state.keys.secret) {
-        const derivedPublicFromSecret = getPublicKeyFromSecret(state.keys.secret.suiteId, state.keys.secret.keyBytes);
-        const sameSuite = parsed.suiteId === state.keys.secret.suiteId;
-        const sameKey = equalsBytes(parsed.keyBytes, derivedPublicFromSecret);
+        if (!state.keys.public) {
+          throw new Error('Active secret session is missing its synchronized public key. Clear session and retry.');
+        }
+        const sameSuite = parsed.suiteId === state.keys.public.suiteId;
+        const sameKey = equalsBytes(parsed.keyBytes, state.keys.public.keyBytes);
         if (!sameSuite || !sameKey) {
           throw new Error('Imported public key does not match loaded secret key. Clear session or import matching key pair.');
         }
@@ -255,23 +244,26 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     if (!file) return;
 
     try {
-      const bytes = await readFileAsBytes(file, { maxBytes: MAX_KEY_FILE_BYTES, field: 'secretKeyFile' });
-      const parsed = unpackSecretKeyV1(bytes);
-      assertKeyLength(parsed.suiteId, parsed.keyBytes, 'secret');
+      const result = await workerClient.call(
+        'IMPORT_SECRET',
+        { secretKeyFile: file },
+        { timeoutMs: KEYGEN_TIMEOUT_MS.SLH_DSA }
+      );
+      const parsedPublic = unpackPublicKeyV1(result.publicKeyFile);
 
       if (state.keys.public) {
-        const derivedPublic = getPublicKeyFromSecret(parsed.suiteId, parsed.keyBytes);
-        const sameSuite = parsed.suiteId === state.keys.public.suiteId;
-        const sameKey = equalsBytes(derivedPublic, state.keys.public.keyBytes);
+        const sameSuite = parsedPublic.suiteId === state.keys.public.suiteId;
+        const sameKey = equalsBytes(parsedPublic.keyBytes, state.keys.public.keyBytes);
         if (!sameSuite || !sameKey) {
           if (!confirm('Loaded public key does not match imported secret key. Replace active public key with derived one?')) {
+            await clearSecretSession(workerClient, result.sessionHandle);
             importSecretInput.value = '';
             return;
           }
         }
       }
 
-      setIdentityFromSecret(state, parsed, { exported: true });
+      await replaceSecretSession(state, workerClient, result, { exported: true });
       syncUi();
       showToast('success', 'Secret key imported (public key synchronized)');
     } catch (err) {
@@ -290,16 +282,29 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     showToast('success', 'Public key exported');
   });
 
-  exportSecretBtn.addEventListener('click', () => {
+  exportSecretBtn.addEventListener('click', async () => {
     if (!state.keys.secret) return;
-    const name = safeFileName(`${getSuiteName(state.keys.secret.suiteId)}-${state.keys.secret.fingerprintShort}.pqsk`);
-    downloadBytes(name, state.keys.secret.fileBytes);
-    state.keys.secret.exported = true;
-    syncUi();
-    showToast('success', 'Secret key exported');
+    let secretKeyFile = null;
+    try {
+      const result = await workerClient.call(
+        'EXPORT_SECRET',
+        { secretSessionHandle: state.keys.secret.sessionHandle },
+        { timeoutMs: SECRET_SESSION_TIMEOUT_MS }
+      );
+      secretKeyFile = result.secretKeyFile;
+      const name = safeFileName(`${getSuiteName(state.keys.secret.suiteId)}-${state.keys.secret.fingerprintShort}.pqsk`);
+      downloadBytes(name, secretKeyFile);
+      state.keys.secret.exported = true;
+      syncUi();
+      showToast('success', 'Secret key exported');
+    } catch (err) {
+      showToast('error', workerFriendlyError(err));
+    } finally {
+      if (secretKeyFile) wipeBytes(secretKeyFile);
+    }
   });
 
-  clearBtn.addEventListener('click', () => {
+  clearBtn.addEventListener('click', async () => {
     if (!state.keys.public && !state.keys.secret) return;
 
     const hasUnexported = (state.keys.public && !state.keys.public.exported) || (state.keys.secret && !state.keys.secret.exported);
@@ -310,7 +315,16 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
       }
     }
 
-    wipeStoredKeys(state);
+    try {
+      if (state.keys.secret?.sessionHandle) {
+        await clearSecretSession(workerClient, state.keys.secret.sessionHandle);
+      }
+    } catch (err) {
+      showToast('error', workerFriendlyError(err));
+      return;
+    }
+
+    wipePublicEntry(state.keys.public, { wipeContainer: true });
     state.keys.public = null;
     state.keys.secret = null;
     syncUi();

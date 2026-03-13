@@ -41,7 +41,7 @@ export function setupLayout(state) {
 
     if (sec) {
       secKeyFpEl.textContent = `${getSuiteName(sec.suiteId)} / ${sec.fingerprintShort}...`;
-      secKeyFpEl.title = 'Secret key loaded in memory';
+      secKeyFpEl.title = 'Secret key loaded in worker session';
       setContextTone(secKeyFpEl, 'warning');
     } else {
       secKeyFpEl.textContent = 'Not Loaded';
