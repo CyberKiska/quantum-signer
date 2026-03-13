@@ -10,8 +10,8 @@ Static client-only web app for post-quantum detached signatures (`.qsig`) using 
 ## Features
 
 1. Key management: generate/import/export key pairs for ML-DSA and SLH-DSA.
-2. Sign: select a file, create detached signature, download `.qsig`.
-3. Verify: select original file + `.qsig`, get `VALID`/`INVALID` with technical details.
+2. Sign: select a file or text, review SHA3-512 payload digest and active signer, create detached signature, download `.qsig`.
+3. Verify: review original input digest and `.qsig` signer metadata before verification; get `VALID`/`INVALID` with technical details and trust caveats when only embedded signer metadata is available.
 
 ------------
 
@@ -61,7 +61,9 @@ Verification UI shows:
 - hash used,
 - signer fingerprint,
 - signature size,
-- computed vs signed hash.
+- computed vs signed hash,
+- trust caveat when verification succeeds only with embedded signer metadata,
+- key mismatch diagnostics when loaded and embedded public keys disagree.
 
 ------------
 

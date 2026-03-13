@@ -217,7 +217,10 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
   if (!candidates.loaded && !candidates.embedded) {
     return {
       valid: false,
+      cryptoValid: false,
       code: ErrorCode.E_INPUT_REQUIRED,
+      verifiedKeySource: 'none',
+      trustSource: 'none',
       warning: 'No verification key available. Load a public key in Keys, or use a .qsig that embeds signer public key.',
       ...hashDetails,
       suiteId: parsedSig.suiteId,
@@ -232,8 +235,15 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
   if (candidates.loaded && candidates.embedded && candidates.embeddedKeyMatchesLoaded === false) {
     const loadedResult = verifyWithCandidate(parsedSig, candidates.loaded);
     const embeddedResult = verifyWithCandidate(parsedSig, candidates.embedded);
+    const cryptoValid = loadedResult.valid || embeddedResult.valid;
+    let verifiedKeySource = 'none';
+    if (loadedResult.valid && embeddedResult.valid) verifiedKeySource = 'both';
+    else if (loadedResult.valid) verifiedKeySource = 'loaded';
+    else if (embeddedResult.valid) verifiedKeySource = 'signature';
+
     return {
       valid: loadedResult.valid,
+      cryptoValid,
       code: loadedResult.valid ? null : ErrorCode.E_SIGNATURE_INVALID,
       ...hashDetails,
       suiteId: parsedSig.suiteId,
@@ -246,6 +256,8 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
       signatureMetadataFingerprintHex: candidates.signatureMetadataFingerprintHex,
       embeddedKeyMatchesLoaded: false,
       keyMismatch: true,
+      verifiedKeySource,
+      trustSource: 'key-mismatch',
       loadedKeyValid: loadedResult.valid,
       embeddedKeyValid: embeddedResult.valid,
       loadedKeyFingerprintHex: loadedResult.signerFingerprintHex,
@@ -260,6 +272,7 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
   if (!result.valid) {
     return {
       valid: false,
+      cryptoValid: false,
       code: ErrorCode.E_SIGNATURE_INVALID,
       ...hashDetails,
       suiteId: parsedSig.suiteId,
@@ -271,11 +284,14 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
       signerFingerprintHex: result.signerFingerprintHex,
       signatureMetadataFingerprintHex: candidates.signatureMetadataFingerprintHex,
       embeddedKeyMatchesLoaded: candidates.embeddedKeyMatchesLoaded,
+      verifiedKeySource: 'none',
+      trustSource: result.keySource === 'signature' ? 'embedded-only' : 'loaded-key',
     };
   }
 
   return {
     valid: true,
+    cryptoValid: true,
     code: null,
     ...hashDetails,
     suiteId: parsedSig.suiteId,
@@ -287,6 +303,8 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     signerFingerprintHex: result.signerFingerprintHex,
     signatureMetadataFingerprintHex: candidates.signatureMetadataFingerprintHex,
     embeddedKeyMatchesLoaded: candidates.embeddedKeyMatchesLoaded,
+    verifiedKeySource: result.keySource === 'signature' ? 'signature' : 'loaded',
+    trustSource: result.keySource === 'signature' ? 'embedded-only' : 'loaded-key',
     warning:
       result.keySource === 'signature'
         ? 'Verified using public key embedded in .qsig. For identity assurance, compare with a trusted key in Keys tab.'
@@ -306,6 +324,7 @@ async function handleHashFile(id, payload) {
     hashAlgName: getHashName(HashAlgId.SHA3_512),
     hashHex: bytesToHexLower(hashBytes),
     hashBytes,
+    inputLength: payload.file.size,
   };
 }
 
@@ -321,6 +340,7 @@ async function handleHashText(_id, payload) {
     hashAlgName: getHashName(HashAlgId.SHA3_512),
     hashHex: bytesToHexLower(hashBytes),
     hashBytes,
+    inputLength: textBytes.length,
   };
 }
 

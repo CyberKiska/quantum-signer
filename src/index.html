@@ -156,8 +156,17 @@
                 <textarea id="sign-text" rows="8" placeholder="Paste text here"></textarea>
               </div>
 
+              <div class="review-panel" aria-live="polite">
+                <div class="review-head">
+                  <h3>Review Before Signing</h3>
+                  <span id="sign-review-badge" class="badge neutral">WAITING</span>
+                </div>
+                <p class="muted-copy review-copy">SHA3-512 is computed before signing. Check the digest and active signer.</p>
+                <div id="sign-review" class="mono-box review-box">Select input to compute payload digest.</div>
+              </div>
+
               <div class="button-group compact">
-                <button id="sign-execute" class="primary" type="button">Create Detached Signature (.qsig)</button>
+                <button id="sign-execute" class="primary" type="button" disabled>Create Detached Signature (.qsig)</button>
                 <button id="sign-reset" class="secondary" type="button">Reset</button>
                 <button id="sign-download" class="primary" type="button" disabled>Download .qsig</button>
               </div>
@@ -174,7 +183,7 @@
           <header class="section-header">
             <h2>Verify Detached Signature</h2>
             <p class="muted-copy">
-              Select original file or plain text and `.qsig`. Verification uses loaded public key and/or embedded key from signature.
+              Select original file or plain text and .qsig. Verification uses loaded public key and/or embedded key from signature.
             </p>
           </header>
 
@@ -210,11 +219,20 @@
               </div>
 
               <div class="button-group compact">
-                <button id="verify-run" class="primary" type="button">Verify Signature</button>
+                <button id="verify-run" class="primary" type="button" disabled>Verify Signature</button>
               </div>
 
               <progress id="verify-progress" value="0" max="100" class="hidden hash-progress"></progress>
               <div id="verify-progress-label" class="progress-label"></div>
+
+              <div class="review-panel" aria-live="polite">
+                <div class="review-head">
+                  <h3>Review Before Verification</h3>
+                  <span id="verify-review-badge" class="badge neutral">WAITING</span>
+                </div>
+                <p class="muted-copy review-copy">Review original input digest and signer metadata before running verification.</p>
+                <div id="verify-review" class="mono-box review-box">Select original input and a .qsig file.</div>
+              </div>
             </div>
 
             <div id="verify-result-card" class="card full-width hidden result-card">
@@ -226,6 +244,7 @@
                   <span id="verify-result-badge" class="badge neutral">-</span>
                 </div>
                 <p id="verify-message" class="result-message"></p>
+                <p id="verify-caveat" class="result-caveat hidden"></p>
 
                   <details class="diagnostics-panel">
                     <summary class="diagnostics-summary">Technical Details</summary>
