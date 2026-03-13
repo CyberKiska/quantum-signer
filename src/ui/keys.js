@@ -284,6 +284,13 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
 
   exportSecretBtn.addEventListener('click', async () => {
     if (!state.keys.secret) return;
+    if (
+      !confirm(
+        'Exporting the secret key gives full control over signatures. Continue and write the secret key to a local file?'
+      )
+    ) {
+      return;
+    }
     let secretKeyFile = null;
     try {
       const result = await workerClient.call(

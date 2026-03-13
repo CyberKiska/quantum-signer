@@ -54,6 +54,8 @@ function describeTrustSource(result) {
       return 'Embedded public key from .qsig';
     case 'key-mismatch':
       return 'Loaded and embedded keys disagree';
+    case 'payload-mismatch':
+      return 'Payload digest mismatch';
     case 'none':
       return 'No verification key available';
     default:

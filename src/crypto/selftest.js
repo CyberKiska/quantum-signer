@@ -16,6 +16,7 @@ import {
   MAX_SIGNATURE_BYTES,
 } from './policy.js';
 import { createSecretSessionManager } from './secret-session.js';
+import { finalizeVerification } from './verify-policy.js';
 import {
   AuthDigestAlgId,
   FingerprintAlgId,
@@ -34,6 +35,8 @@ import {
   unpackSignatureV2,
 } from '../formats/containers.js';
 import { wipeBytes } from './bytes.js';
+
+const QSIG_V2_SIG_HEADER_LENGTH = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 64 + 32 + 1 + 1 + 2 + 2 + 4;
 
 const QUICK_TEST_SUITES = [
   SuiteId.ML_DSA_44,
@@ -66,14 +69,32 @@ function buildTbs(suiteId, fileHash, authMetaDigest) {
   });
 }
 
-function buildSignatureContainer({ suiteId, payloadBytes, secretKey, publicKey }) {
+function getAuthMetadataOffsets(sigFile) {
+  const view = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
+  const ctxLen = sigFile[108];
+  const authMetaLen = view.getUint16(110, true);
+  const authMetaOffset = QSIG_V2_SIG_HEADER_LENGTH + ctxLen;
+  return {
+    authMetaOffset,
+    authMetaLen,
+  };
+}
+
+function getSecondAuthMetaRecordOffset(sigFile) {
+  const { authMetaOffset } = getAuthMetadataOffsets(sigFile);
+  const view = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
+  const firstLen = view.getUint16(authMetaOffset + 1, true);
+  return authMetaOffset + 3 + firstLen;
+}
+
+function buildSignatureContainer({ suiteId, payloadBytes, secretKey, publicKey, embeddedPublicKey = publicKey }) {
   const fileHash = hashBytesSHA3512(payloadBytes);
   const signerFingerprint = packSignerFingerprint({
     algId: FingerprintAlgId.SHA3_256,
-    digest: computeFingerprintBytes(publicKey),
+    digest: computeFingerprintBytes(embeddedPublicKey),
   });
   const authenticatedMetadata = {
-    signerPublicKey: publicKey,
+    signerPublicKey: embeddedPublicKey,
     signerFingerprint,
   };
   const authMetaBytes = packAuthenticatedMetadataV2(authenticatedMetadata);
@@ -292,6 +313,101 @@ function buildCases(suites) {
         }
       },
     });
+
+    cases.push({
+      name: `${prefix}: embedded-only verification must stay valid with warning`,
+      fn: async () => {
+        const keys = generateKeypair(suiteId);
+        const payload = textBytes('embedded-only-policy-check');
+        const { sigFile } = buildSignatureContainer({
+          suiteId,
+          payloadBytes: payload,
+          secretKey: keys.secretKey,
+          publicKey: keys.publicKey,
+        });
+
+        const parsedSig = unpackSignatureV2(sigFile);
+        const result = finalizeVerification(parsedSig, null, {
+          inputKind: 'text',
+          inputLength: payload.length,
+        });
+
+        if (!result.valid || !result.cryptoValid) {
+          throw new Error('embedded-only verification unexpectedly failed');
+        }
+        if (result.trustSource !== 'embedded-only' || result.verifiedKeySource !== 'signature') {
+          throw new Error('embedded-only verification returned wrong trust semantics');
+        }
+        if (typeof result.warning !== 'string' || result.warning.length === 0) {
+          throw new Error('embedded-only verification is missing warning text');
+        }
+      },
+    });
+
+    cases.push({
+      name: `${prefix}: wrong loaded key must produce mismatch semantics`,
+      fn: async () => {
+        const signingKeys = generateKeypair(suiteId);
+        const wrongLoadedKeys = generateKeypair(suiteId);
+        const payload = textBytes('wrong-loaded-key-policy-check');
+        const { sigFile } = buildSignatureContainer({
+          suiteId,
+          payloadBytes: payload,
+          secretKey: signingKeys.secretKey,
+          publicKey: signingKeys.publicKey,
+        });
+
+        const parsedSig = unpackSignatureV2(sigFile);
+        const wrongPublicKeyFile = packPublicKeyV1({ suiteId, keyBytes: wrongLoadedKeys.publicKey });
+        const result = finalizeVerification(parsedSig, wrongPublicKeyFile, {
+          inputKind: 'text',
+          inputLength: payload.length,
+        });
+
+        if (result.valid || !result.cryptoValid || result.keyMismatch !== true) {
+          throw new Error('wrong loaded key did not produce mismatch semantics');
+        }
+        if (result.trustSource !== 'key-mismatch' || result.verifiedKeySource !== 'signature') {
+          throw new Error('wrong loaded key mismatch trust semantics are incorrect');
+        }
+        if (result.loadedKeyValid !== false || result.embeddedKeyValid !== true) {
+          throw new Error('wrong loaded key mismatch validity flags are incorrect');
+        }
+      },
+    });
+
+    cases.push({
+      name: `${prefix}: inconsistent embedded metadata must still verify only with loaded key`,
+      fn: async () => {
+        const signingKeys = generateKeypair(suiteId);
+        const embeddedKeys = generateKeypair(suiteId);
+        const payload = textBytes('inconsistent-embedded-metadata-check');
+        const { sigFile } = buildSignatureContainer({
+          suiteId,
+          payloadBytes: payload,
+          secretKey: signingKeys.secretKey,
+          publicKey: signingKeys.publicKey,
+          embeddedPublicKey: embeddedKeys.publicKey,
+        });
+
+        const parsedSig = unpackSignatureV2(sigFile);
+        const loadedPublicKeyFile = packPublicKeyV1({ suiteId, keyBytes: signingKeys.publicKey });
+        const result = finalizeVerification(parsedSig, loadedPublicKeyFile, {
+          inputKind: 'text',
+          inputLength: payload.length,
+        });
+
+        if (!result.valid || !result.cryptoValid || result.keyMismatch !== true) {
+          throw new Error('inconsistent embedded metadata did not produce expected mismatch state');
+        }
+        if (result.trustSource !== 'key-mismatch' || result.verifiedKeySource !== 'loaded') {
+          throw new Error('inconsistent embedded metadata trust semantics are incorrect');
+        }
+        if (result.loadedKeyValid !== true || result.embeddedKeyValid !== false) {
+          throw new Error('inconsistent embedded metadata validity flags are incorrect');
+        }
+      },
+    });
   }
 
   cases.push({
@@ -331,9 +447,8 @@ function buildCases(suites) {
       });
 
       const tampered = Uint8Array.from(sigFile);
-      const ctxLen = textBytes(QSIG_V2_DEFAULT_CTX).length;
-      const headerLen = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 64 + 32 + 1 + 1 + 2 + 2 + 4;
-      tampered[headerLen + ctxLen + 8] ^= 0x01;
+      const { authMetaOffset } = getAuthMetadataOffsets(tampered);
+      tampered[authMetaOffset + 8] ^= 0x01;
 
       let failed = false;
       try {
@@ -344,6 +459,64 @@ function buildCases(suites) {
 
       if (!failed) {
         throw new Error('tampered authenticated metadata unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'unknown critical authenticated metadata tag must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('unknown-critical-tag-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      const secondRecordOffset = getSecondAuthMetaRecordOffset(tampered);
+      tampered[secondRecordOffset] = 0x80;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (_err) {
+        failed = true;
+      }
+
+      if (!failed) {
+        throw new Error('unknown critical auth metadata tag unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'unsupported signer fingerprint alg id must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('unsupported-fingerprint-alg-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      const secondRecordOffset = getSecondAuthMetaRecordOffset(tampered);
+      tampered[secondRecordOffset + 3] = 0x02;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (_err) {
+        failed = true;
+      }
+
+      if (!failed) {
+        throw new Error('unsupported fingerprint alg unexpectedly parsed');
       }
     },
   });

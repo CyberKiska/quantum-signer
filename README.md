@@ -95,7 +95,11 @@ Covers:
 - verify with wrong key (invalid)
 - tampered signature (invalid)
 - context mismatch (invalid)
+- embedded-only verification semantics (`VALID` with caveat)
+- loaded-vs-embedded mismatch semantics
 - tampered authenticated metadata (parse rejection)
+- unknown critical authenticated metadata tag (parse rejection)
+- unsupported signer fingerprint algorithm id (parse rejection)
 - oversized context/signature/payload inputs (rejected)
 - malformed container parse rejection
 
