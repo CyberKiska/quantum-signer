@@ -6,8 +6,8 @@ import {
 import { equalsBytes, wipeBytes } from '../crypto/bytes.js';
 import {
   getSuiteName,
-  packPublicKeyV1,
-  unpackPublicKeyV1,
+  packPublicKey,
+  unpackPublicKey,
 } from '../formats/containers.js';
 import {
   MAX_KEY_FILE_BYTES,
@@ -73,7 +73,7 @@ function createPublicEntry(parsed, { exported = true } = {}) {
   return {
     suiteId: parsed.suiteId,
     keyBytes,
-    fileBytes: packPublicKeyV1({ suiteId: parsed.suiteId, keyBytes }),
+    fileBytes: packPublicKey({ suiteId: parsed.suiteId, keyBytes }),
     fingerprintShort: computeFingerprint(keyBytes, 8),
     fingerprintHex: computeFingerprintHex(keyBytes),
     exported,
@@ -97,7 +97,7 @@ function setPublicKey(state, parsed, options = {}) {
 }
 
 function applySecretSessionIdentity(state, result, options = {}) {
-  const parsedPublic = unpackPublicKeyV1(result.publicKeyFile);
+  const parsedPublic = unpackPublicKey(result.publicKeyFile);
   setPublicKey(state, parsedPublic, options);
   state.keys.secret = createSecretSessionEntry(result, options);
 }
@@ -210,7 +210,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
 
     try {
       const bytes = await readFileAsBytes(file, { maxBytes: MAX_KEY_FILE_BYTES, field: 'publicKeyFile' });
-      const parsed = unpackPublicKeyV1(bytes);
+      const parsed = unpackPublicKey(bytes);
       assertKeyLength(parsed.suiteId, parsed.keyBytes, 'public');
 
       if (state.keys.secret) {
@@ -249,7 +249,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
         { secretKeyFile: file },
         { timeoutMs: KEYGEN_TIMEOUT_MS.SLH_DSA }
       );
-      const parsedPublic = unpackPublicKeyV1(result.publicKeyFile);
+      const parsedPublic = unpackPublicKey(result.publicKeyFile);
 
       if (state.keys.public) {
         const sameSuite = parsedPublic.suiteId === state.keys.public.suiteId;

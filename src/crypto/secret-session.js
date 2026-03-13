@@ -8,7 +8,7 @@ import {
 import { wipeBytes } from './bytes.js';
 import { ErrorCode, createError } from './errors.js';
 import { MAX_KEY_FILE_BYTES, assertBytesLimit } from './policy.js';
-import { packPublicKeyV1, packSecretKeyV1, unpackSecretKeyV1 } from '../formats/containers.js';
+import { packPublicKey, packSecretKey, unpackSecretKey } from '../formats/containers.js';
 
 function cloneBytes(bytes) {
   return Uint8Array.from(bytes);
@@ -22,7 +22,7 @@ function buildSessionSummary(handle, session) {
     secretKeyLength: session.secretKey.length,
     fingerprintShort: session.fingerprintShort,
     fingerprintHex: session.fingerprintHex,
-    publicKeyFile: packPublicKeyV1({
+    publicKeyFile: packPublicKey({
       suiteId: session.suiteId,
       keyBytes: session.publicKey,
     }),
@@ -89,7 +89,7 @@ export function createSecretSessionManager() {
 
     importSecretKeyFile(secretKeyFile) {
       assertBytesLimit(secretKeyFile, MAX_KEY_FILE_BYTES, 'secretKeyFile');
-      const parsedSecret = unpackSecretKeyV1(secretKeyFile);
+      const parsedSecret = unpackSecretKey(secretKeyFile);
       try {
         return createSession({
           suiteId: parsedSecret.suiteId,
@@ -102,7 +102,7 @@ export function createSecretSessionManager() {
 
     exportSecretKeyFile(handle) {
       const session = requireSession(handle);
-      return packSecretKeyV1({
+      return packSecretKey({
         suiteId: session.suiteId,
         keyBytes: session.secretKey,
       });

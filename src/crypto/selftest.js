@@ -1,5 +1,5 @@
 import {
-  QSIG_V2_DEFAULT_CTX,
+  QSIG_DEFAULT_CTX,
   bytesToHexLower,
   computeFingerprintBytes,
   generateKeypair,
@@ -25,13 +25,13 @@ import {
   SuiteId,
   buildTBSV2,
   computeAuthMetaDigestV2,
-  packPublicKeyV1,
-  packSecretKeyV1,
+  packPublicKey,
+  packSecretKey,
   packAuthenticatedMetadataV2,
   packSignatureV2,
   packSignerFingerprint,
-  unpackPublicKeyV1,
-  unpackSecretKeyV1,
+  unpackPublicKey,
+  unpackSecretKey,
   unpackSignatureV2,
 } from '../formats/containers.js';
 import { wipeBytes } from './bytes.js';
@@ -55,7 +55,7 @@ function textBytes(value) {
 }
 
 function buildContextBytes() {
-  return textBytes(QSIG_V2_DEFAULT_CTX);
+  return textBytes(QSIG_DEFAULT_CTX);
 }
 
 function buildTbs(suiteId, fileHash, authMetaDigest) {
@@ -116,7 +116,7 @@ function buildSignatureContainer({ suiteId, payloadBytes, secretKey, publicKey, 
     payloadDigest: fileHash,
     authMetaDigest,
     signature,
-    ctx: QSIG_V2_DEFAULT_CTX,
+    ctx: QSIG_DEFAULT_CTX,
     authenticatedMetadata,
     displayMetadata: {
       filename: 'self-test.txt',
@@ -153,11 +153,11 @@ function buildCases(suites) {
       name: `${prefix}: keygen -> sign -> verify`,
       fn: async () => {
         const keys = generateKeypair(suiteId);
-        const publicKeyFile = packPublicKeyV1({ suiteId, keyBytes: keys.publicKey });
-        const secretKeyFile = packSecretKeyV1({ suiteId, keyBytes: keys.secretKey });
+        const publicKeyFile = packPublicKey({ suiteId, keyBytes: keys.publicKey });
+        const secretKeyFile = packSecretKey({ suiteId, keyBytes: keys.secretKey });
 
-        const parsedPublic = unpackPublicKeyV1(publicKeyFile);
-        const parsedSecret = unpackSecretKeyV1(secretKeyFile);
+        const parsedPublic = unpackPublicKey(publicKeyFile);
+        const parsedSecret = unpackSecretKey(secretKeyFile);
 
         const payload = textBytes('quantum-signer self-test payload');
         const { sigFile } = buildSignatureContainer({
@@ -299,7 +299,7 @@ function buildCases(suites) {
         });
 
         const parsedSig = unpackSignatureV2(sigFile);
-        const wrongContext = textBytes(`${QSIG_V2_DEFAULT_CTX}/wrong`);
+        const wrongContext = textBytes(`${QSIG_DEFAULT_CTX}/wrong`);
         const valid = verifyBytes({
           suiteId,
           message: parsedSig.tbs,
@@ -358,7 +358,7 @@ function buildCases(suites) {
         });
 
         const parsedSig = unpackSignatureV2(sigFile);
-        const wrongPublicKeyFile = packPublicKeyV1({ suiteId, keyBytes: wrongLoadedKeys.publicKey });
+        const wrongPublicKeyFile = packPublicKey({ suiteId, keyBytes: wrongLoadedKeys.publicKey });
         const result = finalizeVerification(parsedSig, wrongPublicKeyFile, {
           inputKind: 'text',
           inputLength: payload.length,
@@ -391,7 +391,7 @@ function buildCases(suites) {
         });
 
         const parsedSig = unpackSignatureV2(sigFile);
-        const loadedPublicKeyFile = packPublicKeyV1({ suiteId, keyBytes: signingKeys.publicKey });
+        const loadedPublicKeyFile = packPublicKey({ suiteId, keyBytes: signingKeys.publicKey });
         const result = finalizeVerification(parsedSig, loadedPublicKeyFile, {
           inputKind: 'text',
           inputLength: payload.length,
@@ -567,7 +567,7 @@ function buildCases(suites) {
           payloadDigest: new Uint8Array(64),
           authMetaDigest,
           signature: new Uint8Array(MAX_SIGNATURE_BYTES + 1),
-          ctx: QSIG_V2_DEFAULT_CTX,
+          ctx: QSIG_DEFAULT_CTX,
           authenticatedMetadata,
           displayMetadata: {},
         });
@@ -609,8 +609,8 @@ function buildCases(suites) {
       const manager = createSecretSessionManager();
       const session = manager.generateSession(SuiteId.ML_DSA_65);
       const exported = manager.exportSecretKeyFile(session.sessionHandle);
-      const parsedSecret = unpackSecretKeyV1(exported);
-      const parsedPublic = unpackPublicKeyV1(session.publicKeyFile);
+      const parsedSecret = unpackSecretKey(exported);
+      const parsedPublic = unpackPublicKey(session.publicKeyFile);
       const derivedPublic = getPublicKeyFromSecret(parsedSecret.suiteId, parsedSecret.keyBytes);
 
       const sameSuite = parsedSecret.suiteId === parsedPublic.suiteId;

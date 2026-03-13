@@ -14,15 +14,13 @@ import {
 } from '../crypto/policy.js';
 import { bytesToHexLower, bytesToUtf8, utf8ToBytes } from './encoding.js';
 
-export const FORMAT_VERSION_MAJOR = 1;
-export const FORMAT_VERSION_MINOR = 1;
-export const TBS_VERSION_MAJOR = 1;
-export const TBS_VERSION_MINOR = 0;
+export const KEY_FORMAT_VERSION_MAJOR = 1;
+export const KEY_FORMAT_VERSION_MINOR = 1;
 
-export const QSIG_V2_FORMAT_VERSION_MAJOR = 2;
-export const QSIG_V2_FORMAT_VERSION_MINOR = 0;
-export const QSIG_V2_TBS_VERSION_MAJOR = 2;
-export const QSIG_V2_TBS_VERSION_MINOR = 0;
+export const QSIG_FORMAT_VERSION_MAJOR = 2;
+export const QSIG_FORMAT_VERSION_MINOR = 0;
+export const QSIG_TBS_VERSION_MAJOR = 2;
+export const QSIG_TBS_VERSION_MINOR = 0;
 
 export const MAGIC_SIG = utf8ToBytes('PQSG');
 export const MAGIC_PQPK = utf8ToBytes('PQPK');
@@ -109,8 +107,6 @@ const U32_MAX = 0xffffffff;
 const U16_MAX = 0xffff;
 const U8_MAX = 0xff;
 const U64_MAX = 0xffffffffffffffffn;
-const MAX_V1_METADATA_BYTES = MAX_AUTH_METADATA_BYTES + MAX_DISPLAY_METADATA_BYTES;
-
 function concatBytes(arrays) {
   let total = 0;
   for (const bytes of arrays) total += bytes.length;
@@ -553,39 +549,9 @@ function metadataFlags(metadata = {}) {
   return flags;
 }
 
-export function buildTBSV1({ formatVerMajor, formatVerMinor, suiteId, hashAlgId, ctxBytes, fileHash }) {
-  ensureU8(formatVerMajor, 'formatVerMajor');
-  ensureU8(formatVerMinor, 'formatVerMinor');
-  ensureSuiteIdSupported(suiteId);
-  ensureHashAlgIdSupported(hashAlgId);
-  ensureUint8Array(ctxBytes || new Uint8Array(), ErrorCode.E_FORMAT_LENGTH, 'ctxBytes');
-  ensureLength(fileHash, FILE_HASH_LENGTH, ErrorCode.E_FORMAT_LENGTH, 'fileHash');
-
-  const context = ctxBytes || new Uint8Array();
-  assertMaxLength(context.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
-  ensureU8(context.length, 'ctxLen');
-
-  const out = new Uint8Array(4 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + context.length + FILE_HASH_LENGTH);
-  let o = 0;
-  out.set(MAGIC_TBS, o);
-  o += 4;
-  out[o++] = TBS_VERSION_MAJOR;
-  out[o++] = TBS_VERSION_MINOR;
-  out[o++] = formatVerMajor;
-  out[o++] = formatVerMinor;
-  out[o++] = suiteId;
-  out[o++] = hashAlgId;
-  out[o++] = context.length;
-  out.set(context, o);
-  o += context.length;
-  out.set(fileHash, o);
-
-  return out;
-}
-
 export function buildTBSV2({
-  formatVerMajor = QSIG_V2_FORMAT_VERSION_MAJOR,
-  formatVerMinor = QSIG_V2_FORMAT_VERSION_MINOR,
+  formatVerMajor = QSIG_FORMAT_VERSION_MAJOR,
+  formatVerMinor = QSIG_FORMAT_VERSION_MINOR,
   suiteId,
   signatureProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
   payloadDigestAlgId = HashAlgId.SHA3_512,
@@ -606,8 +572,8 @@ export function buildTBSV2({
   let o = 0;
   out.set(MAGIC_TBS, o);
   o += 4;
-  out[o++] = QSIG_V2_TBS_VERSION_MAJOR;
-  out[o++] = QSIG_V2_TBS_VERSION_MINOR;
+  out[o++] = QSIG_TBS_VERSION_MAJOR;
+  out[o++] = QSIG_TBS_VERSION_MINOR;
   out[o++] = formatVerMajor;
   out[o++] = formatVerMinor;
   out[o++] = suiteId;
@@ -631,8 +597,8 @@ export function packSignatureV2({
   ctx = 'quantum-signer/v2',
   authenticatedMetadata = {},
   displayMetadata = {},
-  versionMajor = QSIG_V2_FORMAT_VERSION_MAJOR,
-  versionMinor = QSIG_V2_FORMAT_VERSION_MINOR,
+  versionMajor = QSIG_FORMAT_VERSION_MAJOR,
+  versionMinor = QSIG_FORMAT_VERSION_MINOR,
 }) {
   ensureU8(versionMajor, 'versionMajor');
   ensureU8(versionMinor, 'versionMinor');
@@ -723,10 +689,10 @@ export function unpackSignatureV2(sigBytes) {
 
   const versionMajor = reader.u8(ErrorCode.E_FORMAT_VERSION);
   const versionMinor = reader.u8(ErrorCode.E_FORMAT_VERSION);
-  if (versionMajor !== QSIG_V2_FORMAT_VERSION_MAJOR) {
+  if (versionMajor !== QSIG_FORMAT_VERSION_MAJOR) {
     throw createError(ErrorCode.E_FORMAT_VERSION, {
       versionMajor,
-      expectedMajor: QSIG_V2_FORMAT_VERSION_MAJOR,
+      expectedMajor: QSIG_FORMAT_VERSION_MAJOR,
     });
   }
 
@@ -832,180 +798,6 @@ export function unpackSignatureV2(sigBytes) {
   };
 }
 
-export function packSignatureV1({
-  suiteId,
-  hashAlgId = HashAlgId.SHA3_512,
-  fileHash,
-  signature,
-  ctx = 'quantum-signer/mvp/v1',
-  metadata = {},
-  versionMajor = FORMAT_VERSION_MAJOR,
-  versionMinor = FORMAT_VERSION_MINOR,
-}) {
-  ensureU8(versionMajor, 'versionMajor');
-  ensureU8(versionMinor, 'versionMinor');
-  ensureSuiteIdSupported(suiteId);
-  ensureHashAlgIdSupported(hashAlgId);
-  ensureLength(fileHash, FILE_HASH_LENGTH, ErrorCode.E_FORMAT_LENGTH, 'fileHash');
-  ensureUint8Array(signature, ErrorCode.E_FORMAT_LENGTH, 'signature');
-
-  if (!(metadata.signerFingerprint instanceof Uint8Array)) {
-    throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'metadata.signerFingerprint' });
-  }
-  unpackSignerFingerprint(metadata.signerFingerprint);
-
-  const ctxBytes = ctx ? utf8ToBytes(ctx) : new Uint8Array();
-  assertMaxLength(ctxBytes.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
-  ensureU8(ctxBytes.length, 'ctxLen');
-
-  const metadataBytes = buildMetadataTLV(metadata);
-  assertMaxLength(metadataBytes.length, MAX_V1_METADATA_BYTES, 'metaLen', ErrorCode.E_FORMAT_LENGTH);
-  assertMaxLength(signature.length, MAX_SIGNATURE_BYTES, 'sigLen', ErrorCode.E_FORMAT_LENGTH);
-  ensureU16(metadataBytes.length, 'metaLen');
-  ensureU32(signature.length, 'sigLen');
-
-  let flags = metadataFlags(metadata);
-  if (ctxBytes.length > 0) flags |= SigFlags.CTX_PRESENT;
-
-  const headerLen = 4 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + 1 + 1 + 2 + 4;
-  const totalLen = headerLen + ctxBytes.length + metadataBytes.length + signature.length;
-  assertMaxLength(totalLen, MAX_SIGNATURE_FILE_BYTES, 'sigBytes', ErrorCode.E_FORMAT_LENGTH);
-  const out = new Uint8Array(totalLen);
-  const view = new DataView(out.buffer);
-
-  let o = 0;
-  out.set(MAGIC_SIG, o);
-  o += 4;
-  out[o++] = versionMajor;
-  out[o++] = versionMinor;
-  out[o++] = suiteId;
-  out[o++] = hashAlgId;
-  view.setUint16(o, flags, true);
-  o += 2;
-  out.set(fileHash, o);
-  o += FILE_HASH_LENGTH;
-  out[o++] = ctxBytes.length;
-  out[o++] = 0;
-  view.setUint16(o, metadataBytes.length, true);
-  o += 2;
-  view.setUint32(o, signature.length, true);
-  o += 4;
-  out.set(ctxBytes, o);
-  o += ctxBytes.length;
-  out.set(metadataBytes, o);
-  o += metadataBytes.length;
-  out.set(signature, o);
-
-  return out;
-}
-
-export function unpackSignatureV1(sigBytes) {
-  assertBytesLimit(sigBytes, MAX_SIGNATURE_FILE_BYTES, 'sigBytes', ErrorCode.E_FORMAT_LENGTH);
-  const minLen = 4 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + 1 + 1 + 2 + 4;
-  if (sigBytes.length < minLen) {
-    throw createError(ErrorCode.E_FORMAT_LENGTH, { minLen, actual: sigBytes.length });
-  }
-
-  const reader = new Reader(sigBytes);
-  const magic = reader.take(4, ErrorCode.E_FORMAT_MAGIC);
-  if (!equalsBytes(magic, MAGIC_SIG)) {
-    throw createError(ErrorCode.E_FORMAT_MAGIC);
-  }
-
-  const versionMajor = reader.u8(ErrorCode.E_FORMAT_VERSION);
-  const versionMinor = reader.u8(ErrorCode.E_FORMAT_VERSION);
-
-  if (versionMajor !== FORMAT_VERSION_MAJOR) {
-    throw createError(ErrorCode.E_FORMAT_VERSION, { versionMajor, expectedMajor: FORMAT_VERSION_MAJOR });
-  }
-
-  const suiteId = reader.u8(ErrorCode.E_SUITE_UNSUPPORTED);
-  const hashAlgId = reader.u8(ErrorCode.E_HASH_UNSUPPORTED);
-  ensureSuiteIdSupported(suiteId);
-  ensureHashAlgIdSupported(hashAlgId);
-
-  const flags = reader.u16(ErrorCode.E_FORMAT_FLAGS);
-  if ((flags & ~KNOWN_SIG_FLAGS) !== 0) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { flags });
-  }
-
-  const fileHash = reader.take(FILE_HASH_LENGTH, ErrorCode.E_FORMAT_LENGTH);
-  const ctxLen = reader.u8(ErrorCode.E_FORMAT_LENGTH);
-  const reserved = reader.u8(ErrorCode.E_FORMAT_FLAGS);
-  if (reserved !== 0) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'reserved', value: reserved });
-  }
-
-  const metaLen = reader.u16(ErrorCode.E_FORMAT_LENGTH);
-  const sigLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
-  assertMaxLength(metaLen, MAX_V1_METADATA_BYTES, 'metaLen', ErrorCode.E_FORMAT_LENGTH);
-  assertMaxLength(sigLen, MAX_SIGNATURE_BYTES, 'sigLen', ErrorCode.E_FORMAT_LENGTH);
-
-  const expectedRemaining = ctxLen + metaLen + sigLen;
-  if (reader.remaining() !== expectedRemaining) {
-    throw createError(ErrorCode.E_FORMAT_LENGTH, {
-      expectedRemaining,
-      remaining: reader.remaining(),
-    });
-  }
-
-  const ctxBytes = reader.take(ctxLen, ErrorCode.E_FORMAT_LENGTH);
-  assertMaxLength(ctxBytes.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
-  const metaBytes = reader.take(metaLen, ErrorCode.E_FORMAT_TLV);
-  const signature = reader.take(sigLen, ErrorCode.E_FORMAT_LENGTH);
-
-  const ctxFlag = (flags & SigFlags.CTX_PRESENT) !== 0;
-  if (ctxFlag !== (ctxLen > 0)) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'ctx', flags, ctxLen });
-  }
-
-  const tlvRecords = decodeTLVBlock(metaBytes);
-  const metadata = parseMetadata(tlvRecords);
-
-  const hasFilename = metadata.filename !== undefined;
-  const hasFilesize = metadata.filesize !== undefined;
-  const hasCreatedAt = metadata.createdAt !== undefined;
-
-  if (((flags & SigFlags.FILENAME_PRESENT) !== 0) !== hasFilename) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'filename', flags });
-  }
-  if (((flags & SigFlags.FILESIZE_PRESENT) !== 0) !== hasFilesize) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'filesize', flags });
-  }
-  if (((flags & SigFlags.CREATED_AT_PRESENT) !== 0) !== hasCreatedAt) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'createdAt', flags });
-  }
-
-  if (versionMinor >= 1 && !metadata.signerFingerprint) {
-    throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'missing_signer_fingerprint' });
-  }
-
-  const ctx = ctxBytes.length > 0 ? decodeUtf8(ctxBytes) : '';
-  const tbs = buildTBSV1({
-    formatVerMajor: versionMajor,
-    formatVerMinor: versionMinor,
-    suiteId,
-    hashAlgId,
-    ctxBytes,
-    fileHash,
-  });
-
-  return {
-    versionMajor,
-    versionMinor,
-    suiteId,
-    hashAlgId,
-    flags,
-    fileHash,
-    ctx,
-    ctxBytes,
-    metadata,
-    signature,
-    signatureLength: signature.length,
-    tbs,
-  };
-}
-
 function buildKeyFile({ magic, suiteId, keyBytes, versionMajor, versionMinor }) {
   ensureU8(versionMajor, 'versionMajor');
   ensureU8(versionMinor, 'versionMinor');
@@ -1053,8 +845,8 @@ function parseKeyFile(bytes, expectedMagic) {
 
   const versionMajor = reader.u8(ErrorCode.E_FORMAT_VERSION);
   const versionMinor = reader.u8(ErrorCode.E_FORMAT_VERSION);
-  if (versionMajor !== FORMAT_VERSION_MAJOR) {
-    throw createError(ErrorCode.E_FORMAT_VERSION, { versionMajor, expectedMajor: FORMAT_VERSION_MAJOR });
+  if (versionMajor !== KEY_FORMAT_VERSION_MAJOR) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, { versionMajor, expectedMajor: KEY_FORMAT_VERSION_MAJOR });
   }
 
   const suiteId = reader.u8(ErrorCode.E_SUITE_UNSUPPORTED);
@@ -1090,11 +882,11 @@ function parseKeyFile(bytes, expectedMagic) {
   };
 }
 
-export function packPublicKeyV1({
+export function packPublicKey({
   suiteId,
   keyBytes,
-  versionMajor = FORMAT_VERSION_MAJOR,
-  versionMinor = FORMAT_VERSION_MINOR,
+  versionMajor = KEY_FORMAT_VERSION_MAJOR,
+  versionMinor = KEY_FORMAT_VERSION_MINOR,
 }) {
   return buildKeyFile({
     magic: MAGIC_PQPK,
@@ -1105,11 +897,11 @@ export function packPublicKeyV1({
   });
 }
 
-export function packSecretKeyV1({
+export function packSecretKey({
   suiteId,
   keyBytes,
-  versionMajor = FORMAT_VERSION_MAJOR,
-  versionMinor = FORMAT_VERSION_MINOR,
+  versionMajor = KEY_FORMAT_VERSION_MAJOR,
+  versionMinor = KEY_FORMAT_VERSION_MINOR,
 }) {
   return buildKeyFile({
     magic: MAGIC_PQSK,
@@ -1120,11 +912,11 @@ export function packSecretKeyV1({
   });
 }
 
-export function unpackPublicKeyV1(bytes) {
+export function unpackPublicKey(bytes) {
   return parseKeyFile(bytes, MAGIC_PQPK);
 }
 
-export function unpackSecretKeyV1(bytes) {
+export function unpackSecretKey(bytes) {
   return parseKeyFile(bytes, MAGIC_PQSK);
 }
 

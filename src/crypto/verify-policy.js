@@ -9,7 +9,7 @@ import {
 } from './policy.js';
 import {
   getHashName,
-  unpackPublicKeyV1,
+  unpackPublicKey,
   unpackSignerFingerprint,
 } from '../formats/containers.js';
 import { validateSignatureAndKeySuites } from './validate.js';
@@ -35,7 +35,7 @@ function resolveVerificationCandidates(parsedSig, publicKeyFile) {
   let loaded = null;
   if (publicKeyFile instanceof Uint8Array) {
     assertBytesLimit(publicKeyFile, MAX_KEY_FILE_BYTES, 'publicKeyFile');
-    const parsedPublic = unpackPublicKeyV1(publicKeyFile);
+    const parsedPublic = unpackPublicKey(publicKeyFile);
     validateSignatureAndKeySuites(parsedSig.suiteId, parsedPublic.suiteId);
     loaded = {
       keySource: 'keys',

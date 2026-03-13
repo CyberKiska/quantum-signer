@@ -1,6 +1,6 @@
 import {
   DEFAULT_SUITE_ID,
-  QSIG_V2_DEFAULT_CTX,
+  QSIG_DEFAULT_CTX,
   assertSignatureLength,
   bytesToHexLower,
   computeFingerprintBytes,
@@ -246,7 +246,7 @@ async function handleSign(id, payload) {
       throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'file|text' });
     }
 
-    const ctxBytes = new TextEncoder().encode(QSIG_V2_DEFAULT_CTX);
+    const ctxBytes = new TextEncoder().encode(QSIG_DEFAULT_CTX);
     const signatureProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
     const payloadDigestAlgId = HashAlgId.SHA3_512;
     const authDigestAlgId = AuthDigestAlgId.SHA3_256;
@@ -292,7 +292,7 @@ async function handleSign(id, payload) {
       payloadDigest: fileHash,
       authMetaDigest,
       signature,
-      ctx: QSIG_V2_DEFAULT_CTX,
+      ctx: QSIG_DEFAULT_CTX,
       authenticatedMetadata,
       displayMetadata,
     });
@@ -305,7 +305,7 @@ async function handleSign(id, payload) {
       suiteName: suite.name,
       hashAlgId: payloadDigestAlgId,
       hashAlgName: getHashName(payloadDigestAlgId),
-      context: QSIG_V2_DEFAULT_CTX,
+      context: QSIG_DEFAULT_CTX,
       fileHashHex: bytesToHexLower(fileHash),
       signatureLength: signature.length,
       signerFingerprintHex,

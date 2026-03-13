@@ -25,8 +25,7 @@ import { bytesToHexLower, hexToBytesStrict } from '../formats/encoding.js';
 export const DEFAULT_SUITE_ID = SuiteId.ML_DSA_87;
 export const DEFAULT_SLH_SUITE_ID = SuiteId.SLH_DSA_SHAKE_128S;
 export const DEFAULT_HASH_ALG_ID = HashAlgId.SHA3_512;
-export const DEFAULT_CTX = 'quantum-signer/mvp/v1';
-export const QSIG_V2_DEFAULT_CTX = 'quantum-signer/v2';
+export const QSIG_DEFAULT_CTX = 'quantum-signer/v2';
 
 const SUITE_REGISTRY = new Map([
   [

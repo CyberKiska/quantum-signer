@@ -1,7 +1,7 @@
 import { ErrorCode, createError } from './errors.js';
 import {
   FILE_HASH_LENGTH,
-  FORMAT_VERSION_MAJOR,
+  KEY_FORMAT_VERSION_MAJOR,
   HASH_NAMES,
   HashAlgId,
   SUITE_NAMES,
@@ -64,9 +64,9 @@ export function validateSignatureAndKeySuites(sigSuiteId, keySuiteId) {
 }
 
 export function validateVersionMajor(versionMajor) {
-  assertCondition(versionMajor === FORMAT_VERSION_MAJOR, ErrorCode.E_FORMAT_VERSION, {
+  assertCondition(versionMajor === KEY_FORMAT_VERSION_MAJOR, ErrorCode.E_FORMAT_VERSION, {
     versionMajor,
-    expectedMajor: FORMAT_VERSION_MAJOR,
+    expectedMajor: KEY_FORMAT_VERSION_MAJOR,
   });
 }
 

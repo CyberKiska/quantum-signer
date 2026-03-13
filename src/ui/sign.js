@@ -1,4 +1,4 @@
-import { QSIG_V2_DEFAULT_CTX } from '../crypto/algorithms.js';
+import { QSIG_DEFAULT_CTX } from '../crypto/algorithms.js';
 import { wipeBytes } from '../crypto/bytes.js';
 import { HashAlgId, getHashName, getSuiteName } from '../formats/containers.js';
 import {
@@ -127,7 +127,7 @@ export function setupSignTab(state, workerClient) {
     const lines = [];
 
     lines.push(describeInput(mode, file, text, previewState.inputLength));
-    lines.push(`Context: ${QSIG_V2_DEFAULT_CTX}`);
+    lines.push(`Context: ${QSIG_DEFAULT_CTX}`);
 
     if (state.keys.secret) {
       lines.push(
