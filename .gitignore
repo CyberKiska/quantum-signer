@@ -4,5 +4,14 @@ Thumbs.db
 /dist
 .log
 .env
-SERIES_CONTRACT.md
 scripts/contract-check.mjs
+
+# Test files
+*.pqpk
+*.pqsk
+*.qsig
+examples/
+
+# Notes
+*.md
+!README.md

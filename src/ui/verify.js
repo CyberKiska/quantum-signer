@@ -26,7 +26,8 @@ function renderVerifyResult(result) {
   lines.push(`Input size: ${result.inputLength} bytes`);
 
   if (result.suiteId) lines.push(`Algorithm: ${getSuiteName(result.suiteId)}`);
-  if (result.hashAlgName) lines.push(`Hash: ${result.hashAlgName}`);
+  if (result.hashAlgName) lines.push(`Payload digest: ${result.hashAlgName}`);
+  if (result.context) lines.push(`Context: ${result.context}`);
   if (typeof result.signatureLength === 'number') lines.push(`Signature size: ${result.signatureLength} bytes`);
 
   if (result.signerFingerprintHex) lines.push(`Verification key fingerprint (SHA3-256): ${result.signerFingerprintHex}`);

@@ -117,7 +117,8 @@ export function setupSignTab(state, workerClient) {
       resultEl.textContent = [
         `Algorithm: ${getSuiteName(result.suiteId)}`,
         `Input: ${result.inputKind} (${result.inputLength} bytes)`,
-        `Hash: ${getHashName(result.hashAlgId)} (${shortHex(result.fileHashHex, 16, 16)})`,
+        `Payload digest: ${getHashName(result.hashAlgId)} (${shortHex(result.fileHashHex, 16, 16)})`,
+        `Context: ${result.context}`,
         `Signer fingerprint (SHA3-256): ${result.signerFingerprintHex}`,
         `Signature size: ${result.signatureLength} bytes`,
       ].join('\n');

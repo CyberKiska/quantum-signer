@@ -8,6 +8,11 @@ export const FORMAT_VERSION_MINOR = 1;
 export const TBS_VERSION_MAJOR = 1;
 export const TBS_VERSION_MINOR = 0;
 
+export const QSIG_V2_FORMAT_VERSION_MAJOR = 2;
+export const QSIG_V2_FORMAT_VERSION_MINOR = 0;
+export const QSIG_V2_TBS_VERSION_MAJOR = 2;
+export const QSIG_V2_TBS_VERSION_MINOR = 0;
+
 export const MAGIC_SIG = utf8ToBytes('PQSG');
 export const MAGIC_PQPK = utf8ToBytes('PQPK');
 export const MAGIC_PQSK = utf8ToBytes('PQSK');
@@ -30,6 +35,14 @@ export const FingerprintAlgId = Object.freeze({
   SHA3_256: 0x01,
 });
 
+export const SignatureProfileId = Object.freeze({
+  PQ_DETACHED_PURE_CONTEXT_V2: 0x01,
+});
+
+export const AuthDigestAlgId = Object.freeze({
+  SHA3_256: 0x01,
+});
+
 export const SUITE_NAMES = Object.freeze({
   [SuiteId.ML_DSA_44]: 'ML-DSA-44',
   [SuiteId.ML_DSA_65]: 'ML-DSA-65',
@@ -47,7 +60,16 @@ export const FINGERPRINT_NAMES = Object.freeze({
   [FingerprintAlgId.SHA3_256]: 'SHA3-256',
 });
 
+export const SIGNATURE_PROFILE_NAMES = Object.freeze({
+  [SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2]: 'PQ_DETACHED_PURE_CONTEXT_V2',
+});
+
+export const AUTH_DIGEST_NAMES = Object.freeze({
+  [AuthDigestAlgId.SHA3_256]: 'SHA3-256',
+});
+
 export const FILE_HASH_LENGTH = 64;
+export const AUTH_META_DIGEST_LENGTH = 32;
 export const SIGNER_FINGERPRINT_DIGEST_LENGTH = 32;
 export const SIGNER_FINGERPRINT_RECORD_LENGTH = 1 + SIGNER_FINGERPRINT_DIGEST_LENGTH;
 
@@ -290,6 +312,18 @@ function ensureHashAlgIdSupported(hashAlgId) {
   }
 }
 
+function ensureSignatureProfileIdSupported(signatureProfileId) {
+  if (signatureProfileId !== SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, { field: 'signatureProfileId', signatureProfileId });
+  }
+}
+
+function ensureAuthDigestAlgIdSupported(authDigestAlgId) {
+  if (authDigestAlgId !== AuthDigestAlgId.SHA3_256) {
+    throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'auth_digest_alg_unsupported', authDigestAlgId });
+  }
+}
+
 function ensureFingerprintAlgIdSupported(algId) {
   if (algId !== FingerprintAlgId.SHA3_256) {
     throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'fingerprint_alg_unsupported', algId });
@@ -306,6 +340,14 @@ export function getHashName(hashAlgId) {
 
 export function getFingerprintName(fingerprintAlgId) {
   return FINGERPRINT_NAMES[fingerprintAlgId] || `Unknown(${fingerprintAlgId})`;
+}
+
+export function getSignatureProfileName(signatureProfileId) {
+  return SIGNATURE_PROFILE_NAMES[signatureProfileId] || `Unknown(${signatureProfileId})`;
+}
+
+export function getAuthDigestName(authDigestAlgId) {
+  return AUTH_DIGEST_NAMES[authDigestAlgId] || `Unknown(${authDigestAlgId})`;
 }
 
 export function packSignerFingerprint({ algId = FingerprintAlgId.SHA3_256, digest }) {
@@ -359,6 +401,74 @@ function buildMetadataTLV(metadata = {}) {
   }
 
   return concatBytes(records);
+}
+
+function ensureOnlyAllowedTags(records, allowedTags, field) {
+  for (const { tag } of records) {
+    if (!allowedTags.has(tag)) {
+      throw createError(ErrorCode.E_FORMAT_TLV, { field, reason: 'unexpected_tag', tag });
+    }
+  }
+}
+
+export function packAuthenticatedMetadataV2(metadata = {}) {
+  const authMetadata = {
+    signerPublicKey: metadata.signerPublicKey,
+    signerFingerprint: metadata.signerFingerprint,
+  };
+  const bytes = buildMetadataTLV(authMetadata);
+  const records = decodeTLVBlock(bytes);
+  ensureOnlyAllowedTags(records, new Set([MetadataTag.SIGNER_PUBLIC_KEY, MetadataTag.SIGNER_FINGERPRINT]), 'authMeta');
+  const parsed = parseMetadata(records);
+  if (!(parsed.signerPublicKey instanceof Uint8Array) || !(parsed.signerFingerprint instanceof Uint8Array)) {
+    throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMeta', reason: 'missing_signer_binding' });
+  }
+  return bytes;
+}
+
+export function packDisplayMetadataV2(metadata = {}) {
+  const displayMetadata = {
+    filename: metadata.filename,
+    filesize: metadata.filesize,
+    createdAt: metadata.createdAt,
+  };
+  const bytes = buildMetadataTLV(displayMetadata);
+  const records = decodeTLVBlock(bytes);
+  ensureOnlyAllowedTags(records, new Set([MetadataTag.FILENAME, MetadataTag.FILESIZE, MetadataTag.CREATED_AT]), 'displayMeta');
+  return bytes;
+}
+
+export function computeAuthMetaDigestV2(authMetaBytes, authDigestAlgId = AuthDigestAlgId.SHA3_256) {
+  ensureAuthDigestAlgIdSupported(authDigestAlgId);
+  ensureUint8Array(authMetaBytes, ErrorCode.E_FORMAT_TLV, 'authMetaBytes');
+  return sha3_256(authMetaBytes);
+}
+
+function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDigest) {
+  ensureAuthDigestAlgIdSupported(authDigestAlgId);
+  ensureUint8Array(authMetaBytes, ErrorCode.E_FORMAT_TLV, 'authMetaBytes');
+  ensureLength(expectedDigest, AUTH_META_DIGEST_LENGTH, ErrorCode.E_FORMAT_TLV, 'authMetaDigest');
+
+  const records = decodeTLVBlock(authMetaBytes);
+  ensureOnlyAllowedTags(records, new Set([MetadataTag.SIGNER_PUBLIC_KEY, MetadataTag.SIGNER_FINGERPRINT]), 'authMeta');
+  const metadata = parseMetadata(records);
+  if (!(metadata.signerPublicKey instanceof Uint8Array) || !(metadata.signerFingerprint instanceof Uint8Array)) {
+    throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMeta', reason: 'missing_signer_binding' });
+  }
+
+  const recomputedDigest = computeAuthMetaDigestV2(authMetaBytes, authDigestAlgId);
+  if (!equalsBytes(recomputedDigest, expectedDigest)) {
+    throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMetaDigest', reason: 'auth_meta_digest_mismatch' });
+  }
+
+  return metadata;
+}
+
+function parseDisplayMetadataV2(displayMetaBytes) {
+  ensureUint8Array(displayMetaBytes, ErrorCode.E_FORMAT_TLV, 'displayMetaBytes');
+  const records = decodeTLVBlock(displayMetaBytes);
+  ensureOnlyAllowedTags(records, new Set([MetadataTag.FILENAME, MetadataTag.FILESIZE, MetadataTag.CREATED_AT]), 'displayMeta');
+  return parseMetadata(records);
 }
 
 function parseCreatedAtValue(value) {
@@ -461,6 +571,246 @@ export function buildTBSV1({ formatVerMajor, formatVerMinor, suiteId, hashAlgId,
   out.set(fileHash, o);
 
   return out;
+}
+
+export function buildTBSV2({
+  formatVerMajor = QSIG_V2_FORMAT_VERSION_MAJOR,
+  formatVerMinor = QSIG_V2_FORMAT_VERSION_MINOR,
+  suiteId,
+  signatureProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
+  payloadDigestAlgId = HashAlgId.SHA3_512,
+  authDigestAlgId = AuthDigestAlgId.SHA3_256,
+  payloadDigest,
+  authMetaDigest,
+}) {
+  ensureU8(formatVerMajor, 'formatVerMajor');
+  ensureU8(formatVerMinor, 'formatVerMinor');
+  ensureSuiteIdSupported(suiteId);
+  ensureSignatureProfileIdSupported(signatureProfileId);
+  ensureHashAlgIdSupported(payloadDigestAlgId);
+  ensureAuthDigestAlgIdSupported(authDigestAlgId);
+  ensureLength(payloadDigest, FILE_HASH_LENGTH, ErrorCode.E_FORMAT_LENGTH, 'payloadDigest');
+  ensureLength(authMetaDigest, AUTH_META_DIGEST_LENGTH, ErrorCode.E_FORMAT_TLV, 'authMetaDigest');
+
+  const out = new Uint8Array(4 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + FILE_HASH_LENGTH + AUTH_META_DIGEST_LENGTH);
+  let o = 0;
+  out.set(MAGIC_TBS, o);
+  o += 4;
+  out[o++] = QSIG_V2_TBS_VERSION_MAJOR;
+  out[o++] = QSIG_V2_TBS_VERSION_MINOR;
+  out[o++] = formatVerMajor;
+  out[o++] = formatVerMinor;
+  out[o++] = suiteId;
+  out[o++] = signatureProfileId;
+  out[o++] = payloadDigestAlgId;
+  out[o++] = authDigestAlgId;
+  out.set(payloadDigest, o);
+  o += FILE_HASH_LENGTH;
+  out.set(authMetaDigest, o);
+  return out;
+}
+
+export function packSignatureV2({
+  suiteId,
+  signatureProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
+  payloadDigestAlgId = HashAlgId.SHA3_512,
+  authDigestAlgId = AuthDigestAlgId.SHA3_256,
+  payloadDigest,
+  authMetaDigest,
+  signature,
+  ctx = 'quantum-signer/v2',
+  authenticatedMetadata = {},
+  displayMetadata = {},
+  versionMajor = QSIG_V2_FORMAT_VERSION_MAJOR,
+  versionMinor = QSIG_V2_FORMAT_VERSION_MINOR,
+}) {
+  ensureU8(versionMajor, 'versionMajor');
+  ensureU8(versionMinor, 'versionMinor');
+  ensureSuiteIdSupported(suiteId);
+  ensureSignatureProfileIdSupported(signatureProfileId);
+  ensureHashAlgIdSupported(payloadDigestAlgId);
+  ensureAuthDigestAlgIdSupported(authDigestAlgId);
+  ensureLength(payloadDigest, FILE_HASH_LENGTH, ErrorCode.E_FORMAT_LENGTH, 'payloadDigest');
+  ensureLength(authMetaDigest, AUTH_META_DIGEST_LENGTH, ErrorCode.E_FORMAT_TLV, 'authMetaDigest');
+  ensureUint8Array(signature, ErrorCode.E_FORMAT_LENGTH, 'signature');
+
+  const ctxBytes = ctx ? utf8ToBytes(ctx) : new Uint8Array();
+  ensureU8(ctxBytes.length, 'ctxLen');
+  if (ctxBytes.length === 0) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'ctx', reason: 'required' });
+  }
+
+  const authMetaBytes = packAuthenticatedMetadataV2(authenticatedMetadata);
+  const recomputedAuthMetaDigest = computeAuthMetaDigestV2(authMetaBytes, authDigestAlgId);
+  if (!equalsBytes(recomputedAuthMetaDigest, authMetaDigest)) {
+    throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMetaDigest', reason: 'mismatch_at_pack' });
+  }
+
+  const displayMetaBytes = packDisplayMetadataV2(displayMetadata);
+  ensureU16(authMetaBytes.length, 'authMetaLen');
+  ensureU16(displayMetaBytes.length, 'displayMetaLen');
+  ensureU32(signature.length, 'sigLen');
+
+  let flags = metadataFlags(displayMetadata);
+  flags |= SigFlags.CTX_PRESENT;
+
+  const headerLen = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + AUTH_META_DIGEST_LENGTH + 1 + 1 + 2 + 2 + 4;
+  const totalLen = headerLen + ctxBytes.length + authMetaBytes.length + displayMetaBytes.length + signature.length;
+  const out = new Uint8Array(totalLen);
+  const view = new DataView(out.buffer);
+
+  let o = 0;
+  out.set(MAGIC_SIG, o);
+  o += 4;
+  out[o++] = versionMajor;
+  out[o++] = versionMinor;
+  out[o++] = suiteId;
+  out[o++] = signatureProfileId;
+  out[o++] = payloadDigestAlgId;
+  out[o++] = authDigestAlgId;
+  view.setUint16(o, flags, true);
+  o += 2;
+  out.set(payloadDigest, o);
+  o += FILE_HASH_LENGTH;
+  out.set(authMetaDigest, o);
+  o += AUTH_META_DIGEST_LENGTH;
+  out[o++] = ctxBytes.length;
+  out[o++] = 0;
+  view.setUint16(o, authMetaBytes.length, true);
+  o += 2;
+  view.setUint16(o, displayMetaBytes.length, true);
+  o += 2;
+  view.setUint32(o, signature.length, true);
+  o += 4;
+  out.set(ctxBytes, o);
+  o += ctxBytes.length;
+  out.set(authMetaBytes, o);
+  o += authMetaBytes.length;
+  out.set(displayMetaBytes, o);
+  o += displayMetaBytes.length;
+  out.set(signature, o);
+
+  return out;
+}
+
+export function unpackSignatureV2(sigBytes) {
+  ensureUint8Array(sigBytes, ErrorCode.E_FORMAT_LENGTH, 'sigBytes');
+  const minLen = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + AUTH_META_DIGEST_LENGTH + 1 + 1 + 2 + 2 + 4;
+  if (sigBytes.length < minLen) {
+    throw createError(ErrorCode.E_FORMAT_LENGTH, { minLen, actual: sigBytes.length });
+  }
+
+  const reader = new Reader(sigBytes);
+  const magic = reader.take(4, ErrorCode.E_FORMAT_MAGIC);
+  if (!equalsBytes(magic, MAGIC_SIG)) {
+    throw createError(ErrorCode.E_FORMAT_MAGIC);
+  }
+
+  const versionMajor = reader.u8(ErrorCode.E_FORMAT_VERSION);
+  const versionMinor = reader.u8(ErrorCode.E_FORMAT_VERSION);
+  if (versionMajor !== QSIG_V2_FORMAT_VERSION_MAJOR) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, {
+      versionMajor,
+      expectedMajor: QSIG_V2_FORMAT_VERSION_MAJOR,
+    });
+  }
+
+  const suiteId = reader.u8(ErrorCode.E_SUITE_UNSUPPORTED);
+  const signatureProfileId = reader.u8(ErrorCode.E_FORMAT_VERSION);
+  const payloadDigestAlgId = reader.u8(ErrorCode.E_HASH_UNSUPPORTED);
+  const authDigestAlgId = reader.u8(ErrorCode.E_FORMAT_TLV);
+  ensureSuiteIdSupported(suiteId);
+  ensureSignatureProfileIdSupported(signatureProfileId);
+  ensureHashAlgIdSupported(payloadDigestAlgId);
+  ensureAuthDigestAlgIdSupported(authDigestAlgId);
+
+  const flags = reader.u16(ErrorCode.E_FORMAT_FLAGS);
+  if ((flags & ~KNOWN_SIG_FLAGS) !== 0) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, { flags });
+  }
+
+  const payloadDigest = reader.take(FILE_HASH_LENGTH, ErrorCode.E_FORMAT_LENGTH);
+  const authMetaDigest = reader.take(AUTH_META_DIGEST_LENGTH, ErrorCode.E_FORMAT_TLV);
+  const ctxLen = reader.u8(ErrorCode.E_FORMAT_LENGTH);
+  const reserved = reader.u8(ErrorCode.E_FORMAT_FLAGS);
+  if (reserved !== 0) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'reserved', value: reserved });
+  }
+
+  const authMetaLen = reader.u16(ErrorCode.E_FORMAT_TLV);
+  const displayMetaLen = reader.u16(ErrorCode.E_FORMAT_TLV);
+  const sigLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
+  const expectedRemaining = ctxLen + authMetaLen + displayMetaLen + sigLen;
+  if (reader.remaining() !== expectedRemaining) {
+    throw createError(ErrorCode.E_FORMAT_LENGTH, {
+      expectedRemaining,
+      remaining: reader.remaining(),
+    });
+  }
+
+  const ctxBytes = reader.take(ctxLen, ErrorCode.E_FORMAT_LENGTH);
+  if (ctxBytes.length === 0) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'ctx', reason: 'required' });
+  }
+  const authMetaBytes = reader.take(authMetaLen, ErrorCode.E_FORMAT_TLV);
+  const displayMetaBytes = reader.take(displayMetaLen, ErrorCode.E_FORMAT_TLV);
+  const signature = reader.take(sigLen, ErrorCode.E_FORMAT_LENGTH);
+
+  const ctxFlag = (flags & SigFlags.CTX_PRESENT) !== 0;
+  if (!ctxFlag) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'ctx', flags, ctxLen });
+  }
+
+  const authenticatedMetadata = parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, authMetaDigest);
+  const displayMetadata = parseDisplayMetadataV2(displayMetaBytes);
+  const metadata = { ...displayMetadata, ...authenticatedMetadata };
+
+  const hasFilename = displayMetadata.filename !== undefined;
+  const hasFilesize = displayMetadata.filesize !== undefined;
+  const hasCreatedAt = displayMetadata.createdAt !== undefined;
+  if (((flags & SigFlags.FILENAME_PRESENT) !== 0) !== hasFilename) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'filename', flags });
+  }
+  if (((flags & SigFlags.FILESIZE_PRESENT) !== 0) !== hasFilesize) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'filesize', flags });
+  }
+  if (((flags & SigFlags.CREATED_AT_PRESENT) !== 0) !== hasCreatedAt) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'createdAt', flags });
+  }
+
+  const ctx = decodeUtf8(ctxBytes);
+  const tbs = buildTBSV2({
+    formatVerMajor: versionMajor,
+    formatVerMinor: versionMinor,
+    suiteId,
+    signatureProfileId,
+    payloadDigestAlgId,
+    authDigestAlgId,
+    payloadDigest,
+    authMetaDigest,
+  });
+
+  return {
+    versionMajor,
+    versionMinor,
+    suiteId,
+    signatureProfileId,
+    hashAlgId: payloadDigestAlgId,
+    payloadDigestAlgId,
+    authDigestAlgId,
+    flags,
+    fileHash: payloadDigest,
+    payloadDigest,
+    authMetaDigest,
+    ctx,
+    ctxBytes,
+    authenticatedMetadata,
+    displayMetadata,
+    metadata,
+    signature,
+    signatureLength: signature.length,
+    tbs,
+  };
 }
 
 export function packSignatureV1({

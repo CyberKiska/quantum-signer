@@ -1,5 +1,5 @@
 import {
-  DEFAULT_CTX,
+  QSIG_V2_DEFAULT_CTX,
   bytesToHexLower,
   computeFingerprintBytes,
   generateKeypair,
@@ -9,19 +9,21 @@ import {
   verifyBytes,
 } from './algorithms.js';
 import {
-  FORMAT_VERSION_MAJOR,
-  FORMAT_VERSION_MINOR,
+  AuthDigestAlgId,
   FingerprintAlgId,
   HashAlgId,
+  SignatureProfileId,
   SuiteId,
-  buildTBSV1,
+  buildTBSV2,
+  computeAuthMetaDigestV2,
   packPublicKeyV1,
   packSecretKeyV1,
-  packSignatureV1,
+  packAuthenticatedMetadataV2,
+  packSignatureV2,
   packSignerFingerprint,
   unpackPublicKeyV1,
   unpackSecretKeyV1,
-  unpackSignatureV1,
+  unpackSignatureV2,
 } from '../formats/containers.js';
 import { wipeBytes } from './bytes.js';
 
@@ -41,48 +43,61 @@ function textBytes(value) {
   return new TextEncoder().encode(value);
 }
 
-function buildTbs(suiteId, fileHash) {
-  return buildTBSV1({
-    formatVerMajor: FORMAT_VERSION_MAJOR,
-    formatVerMinor: FORMAT_VERSION_MINOR,
+function buildContextBytes() {
+  return textBytes(QSIG_V2_DEFAULT_CTX);
+}
+
+function buildTbs(suiteId, fileHash, authMetaDigest) {
+  return buildTBSV2({
     suiteId,
-    hashAlgId: HashAlgId.SHA3_512,
-    ctxBytes: textBytes(DEFAULT_CTX),
-    fileHash,
+    signatureProfileId: SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
+    payloadDigestAlgId: HashAlgId.SHA3_512,
+    authDigestAlgId: AuthDigestAlgId.SHA3_256,
+    payloadDigest: fileHash,
+    authMetaDigest,
   });
 }
 
 function buildSignatureContainer({ suiteId, payloadBytes, secretKey, publicKey }) {
   const fileHash = hashBytesSHA3512(payloadBytes);
-  const tbs = buildTbs(suiteId, fileHash);
+  const signerFingerprint = packSignerFingerprint({
+    algId: FingerprintAlgId.SHA3_256,
+    digest: computeFingerprintBytes(publicKey),
+  });
+  const authenticatedMetadata = {
+    signerPublicKey: publicKey,
+    signerFingerprint,
+  };
+  const authMetaBytes = packAuthenticatedMetadataV2(authenticatedMetadata);
+  const authMetaDigest = computeAuthMetaDigestV2(authMetaBytes, AuthDigestAlgId.SHA3_256);
+  const tbs = buildTbs(suiteId, fileHash, authMetaDigest);
   const signature = signBytes({
     suiteId,
     message: tbs,
     secretKey,
     hedged: true,
+    contextBytes: buildContextBytes(),
   });
 
-  const signerFingerprint = packSignerFingerprint({
-    algId: FingerprintAlgId.SHA3_256,
-    digest: computeFingerprintBytes(publicKey),
-  });
-
-  const sigFile = packSignatureV1({
+  const sigFile = packSignatureV2({
     suiteId,
-    hashAlgId: HashAlgId.SHA3_512,
-    fileHash,
+    signatureProfileId: SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
+    payloadDigestAlgId: HashAlgId.SHA3_512,
+    authDigestAlgId: AuthDigestAlgId.SHA3_256,
+    payloadDigest: fileHash,
+    authMetaDigest,
     signature,
-    ctx: DEFAULT_CTX,
-    metadata: {
+    ctx: QSIG_V2_DEFAULT_CTX,
+    authenticatedMetadata,
+    displayMetadata: {
       filename: 'self-test.txt',
       filesize: BigInt(payloadBytes.length),
       createdAt: '2025-01-01T00:00:00.000Z',
-      signerPublicKey: publicKey,
-      signerFingerprint,
     },
   });
 
-  return { sigFile, fileHash };
+  wipeBytes(authMetaBytes);
+  return { sigFile, fileHash, authMetaDigest };
 }
 
 async function runCase(name, fn) {
@@ -123,12 +138,13 @@ function buildCases(suites) {
           publicKey: parsedPublic.keyBytes,
         });
 
-        const parsedSig = unpackSignatureV1(sigFile);
+        const parsedSig = unpackSignatureV2(sigFile);
         const valid = verifyBytes({
           suiteId,
           message: parsedSig.tbs,
           signature: parsedSig.signature,
           publicKey: parsedPublic.keyBytes,
+          contextBytes: parsedSig.ctxBytes,
         });
 
         wipeBytes(parsedSecret.keyBytes);
@@ -153,17 +169,18 @@ function buildCases(suites) {
           publicKey: keys.publicKey,
         });
 
-        const parsedSig = unpackSignatureV1(sigFile);
+        const parsedSig = unpackSignatureV2(sigFile);
         const modifiedHash = hashBytesSHA3512(modifiedPayload);
         if (bytesToHexLower(modifiedHash) === bytesToHexLower(parsedSig.fileHash)) {
           throw new Error('hash collision in self-test input vectors');
         }
-        const modifiedTbs = buildTbs(suiteId, modifiedHash);
+        const modifiedTbs = buildTbs(suiteId, modifiedHash, parsedSig.authMetaDigest);
         const valid = verifyBytes({
           suiteId,
           message: modifiedTbs,
           signature: parsedSig.signature,
           publicKey: keys.publicKey,
+          contextBytes: parsedSig.ctxBytes,
         });
         if (valid) {
           throw new Error('signature unexpectedly verified for modified payload');
@@ -185,12 +202,13 @@ function buildCases(suites) {
           publicKey: keyA.publicKey,
         });
 
-        const parsedSig = unpackSignatureV1(sigFile);
+        const parsedSig = unpackSignatureV2(sigFile);
         const valid = verifyBytes({
           suiteId,
           message: parsedSig.tbs,
           signature: parsedSig.signature,
           publicKey: keyB.publicKey,
+          contextBytes: parsedSig.ctxBytes,
         });
 
         if (valid) {
@@ -204,19 +222,65 @@ function buildCases(suites) {
       fn: async () => {
         const keys = generateKeypair(suiteId);
         const fileHash = hashBytesSHA3512(textBytes('tamper-check'));
-        const tbs = buildTbs(suiteId, fileHash);
-        const signature = signBytes({ suiteId, message: tbs, secretKey: keys.secretKey, hedged: true });
+        const signerFingerprint = packSignerFingerprint({
+          algId: FingerprintAlgId.SHA3_256,
+          digest: computeFingerprintBytes(keys.publicKey),
+        });
+        const authMetaBytes = packAuthenticatedMetadataV2({
+          signerPublicKey: keys.publicKey,
+          signerFingerprint,
+        });
+        const authMetaDigest = computeAuthMetaDigestV2(authMetaBytes, AuthDigestAlgId.SHA3_256);
+        const tbs = buildTbs(suiteId, fileHash, authMetaDigest);
+        const signature = signBytes({
+          suiteId,
+          message: tbs,
+          secretKey: keys.secretKey,
+          hedged: true,
+          contextBytes: buildContextBytes(),
+        });
         signature[0] ^= 0x01;
+        wipeBytes(authMetaBytes);
 
         const valid = verifyBytes({
           suiteId,
           message: tbs,
           signature,
           publicKey: keys.publicKey,
+          contextBytes: buildContextBytes(),
         });
 
         if (valid) {
           throw new Error('tampered signature unexpectedly verified');
+        }
+      },
+    });
+
+    cases.push({
+      name: `${prefix}: context mismatch must fail`,
+      fn: async () => {
+        const keys = generateKeypair(suiteId);
+        const payload = textBytes('context-mismatch-check');
+
+        const { sigFile } = buildSignatureContainer({
+          suiteId,
+          payloadBytes: payload,
+          secretKey: keys.secretKey,
+          publicKey: keys.publicKey,
+        });
+
+        const parsedSig = unpackSignatureV2(sigFile);
+        const wrongContext = textBytes(`${QSIG_V2_DEFAULT_CTX}/wrong`);
+        const valid = verifyBytes({
+          suiteId,
+          message: parsedSig.tbs,
+          signature: parsedSig.signature,
+          publicKey: keys.publicKey,
+          contextBytes: wrongContext,
+        });
+
+        if (valid) {
+          throw new Error('signature unexpectedly verified with wrong context');
         }
       },
     });
@@ -236,12 +300,42 @@ function buildCases(suites) {
       sigFile[0] = 0x00;
       let failed = false;
       try {
-        unpackSignatureV1(sigFile);
+        unpackSignatureV2(sigFile);
       } catch (_err) {
         failed = true;
       }
       if (!failed) {
         throw new Error('invalid magic unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'tampered authenticated metadata must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('auth-meta-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      const ctxLen = textBytes(QSIG_V2_DEFAULT_CTX).length;
+      const headerLen = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 64 + 32 + 1 + 1 + 2 + 2 + 4;
+      tampered[headerLen + ctxLen + 8] ^= 0x01;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (_err) {
+        failed = true;
+      }
+
+      if (!failed) {
+        throw new Error('tampered authenticated metadata unexpectedly parsed');
       }
     },
   });

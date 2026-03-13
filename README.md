@@ -24,10 +24,12 @@ Supported suites:
 - SLH-DSA-SHAKE-128s / 192s / 256s (FIPS 205 family)
 
 Hashing:
-- SHA3-512 prehash (FIPS 202) for file digest inside signed TBS payload.
+- SHA3-512 payload digest (FIPS 202) for detached-content binding inside the current signed TBS payload.
 
 Important note:
 - This project follows the algorithm specifications and good implementation practices, but it is not a formally FIPS-validated module.
+- `qsig v2` uses a project-specific detached-signature container around standard ML-DSA / SLH-DSA signing.
+- Domain separation is carried through the standardized algorithm `context` parameter, and signer metadata is authenticated explicitly.
 
 ### Security model
 
@@ -42,12 +44,15 @@ Important note:
 Container includes:
 - `magic` + `version`
 - `suite id` (ML-DSA / SLH-DSA parameter set)
-- `hash id` (`SHA3-512`)
-- `file hash` (prehash)
-- optional metadata (`filename`, `filesize`, `createdAt` ISO8601)
-- signer key data:
-  - optional embedded public key
-  - mandatory signer fingerprint record (`SHA3-256(pubkey)`)
+- `signature profile id`
+- `payload digest alg id` (`SHA3-512`)
+- `payload digest`
+- `auth metadata digest alg id`
+- algorithm `context`
+- authenticated signer metadata:
+  - embedded public key
+  - signer fingerprint record (`SHA3-256(pubkey)`)
+- display metadata (`filename`, `filesize`, `createdAt` ISO8601)
 - signature bytes (detached)
 
 Verification UI shows:
@@ -86,6 +91,8 @@ Covers:
 - verify on modified file (invalid)
 - verify with wrong key (invalid)
 - tampered signature (invalid)
+- context mismatch (invalid)
+- tampered authenticated metadata (parse rejection)
 - malformed container parse rejection
 
 Full mode (extra SLH suites):

@@ -1,6 +1,6 @@
 import {
-  DEFAULT_CTX,
   DEFAULT_SUITE_ID,
+  QSIG_V2_DEFAULT_CTX,
   assertSignatureLength,
   bytesToHexLower,
   computeFingerprint,
@@ -16,19 +16,21 @@ import {
 } from './crypto/algorithms.js';
 import { ErrorCode, createError, normalizeError } from './crypto/errors.js';
 import {
-  FORMAT_VERSION_MAJOR,
-  FORMAT_VERSION_MINOR,
+  AuthDigestAlgId,
   FingerprintAlgId,
   HashAlgId,
-  buildTBSV1,
+  SignatureProfileId,
+  buildTBSV2,
+  computeAuthMetaDigestV2,
   getHashName,
   packPublicKeyV1,
   packSecretKeyV1,
-  packSignatureV1,
+  packAuthenticatedMetadataV2,
+  packSignatureV2,
   packSignerFingerprint,
   unpackPublicKeyV1,
   unpackSecretKeyV1,
-  unpackSignatureV1,
+  unpackSignatureV2,
   unpackSignerFingerprint,
 } from './formats/containers.js';
 import {
@@ -163,6 +165,7 @@ function verifyWithCandidate(parsedSig, candidate) {
     message: parsedSig.tbs,
     signature: parsedSig.signature,
     publicKey: candidate.publicKey,
+    contextBytes: parsedSig.ctxBytes,
   });
   return {
     keySource: candidate.keySource,
@@ -196,6 +199,7 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
       suiteId: parsedSig.suiteId,
       hashAlgId: parsedSig.hashAlgId,
       hashAlgName: getHashName(parsedSig.hashAlgId),
+      context: parsedSig.ctx,
       signatureLength: parsedSig.signature.length,
       signatureMetadataFingerprintHex: candidates.signatureMetadataFingerprintHex,
     };
@@ -211,6 +215,7 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
       suiteId: parsedSig.suiteId,
       hashAlgId: parsedSig.hashAlgId,
       hashAlgName: getHashName(parsedSig.hashAlgId),
+      context: parsedSig.ctx,
       signatureLength: parsedSig.signature.length,
       keySource: loadedResult.keySource,
       signerFingerprintHex: loadedResult.signerFingerprintHex,
@@ -236,6 +241,7 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
       suiteId: parsedSig.suiteId,
       hashAlgId: parsedSig.hashAlgId,
       hashAlgName: getHashName(parsedSig.hashAlgId),
+      context: parsedSig.ctx,
       signatureLength: parsedSig.signature.length,
       keySource: result.keySource,
       signerFingerprintHex: result.signerFingerprintHex,
@@ -251,6 +257,7 @@ function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     suiteId: parsedSig.suiteId,
     hashAlgId: parsedSig.hashAlgId,
     hashAlgName: getHashName(parsedSig.hashAlgId),
+    context: parsedSig.ctx,
     signatureLength: parsedSig.signature.length,
     keySource: result.keySource,
     signerFingerprintHex: result.signerFingerprintHex,
@@ -296,19 +303,24 @@ async function handleKeygen(_id, payload) {
   const suite = getSuite(suiteId);
   const keys = generateKeypair(suiteId);
 
-  const publicKeyFile = packPublicKeyV1({ suiteId, keyBytes: keys.publicKey });
-  const secretKeyFile = packSecretKeyV1({ suiteId, keyBytes: keys.secretKey });
+  try {
+    const publicKeyFile = packPublicKeyV1({ suiteId, keyBytes: keys.publicKey });
+    const secretKeyFile = packSecretKeyV1({ suiteId, keyBytes: keys.secretKey });
 
-  return {
-    suiteId,
-    suiteName: suite.name,
-    publicKeyLength: keys.publicKey.length,
-    secretKeyLength: keys.secretKey.length,
-    fingerprintShort: computeFingerprint(keys.publicKey, 8),
-    fingerprintHex: computeFingerprintHex(keys.publicKey),
-    publicKeyFile,
-    secretKeyFile,
-  };
+    return {
+      suiteId,
+      suiteName: suite.name,
+      publicKeyLength: keys.publicKey.length,
+      secretKeyLength: keys.secretKey.length,
+      fingerprintShort: computeFingerprint(keys.publicKey, 8),
+      fingerprintHex: computeFingerprintHex(keys.publicKey),
+      publicKeyFile,
+      secretKeyFile,
+    };
+  } finally {
+    wipeBytes(keys.publicKey);
+    wipeBytes(keys.secretKey);
+  }
 }
 
 async function handleSign(id, payload) {
@@ -318,10 +330,12 @@ async function handleSign(id, payload) {
   const suite = getSuite(parsedSecret.suiteId);
 
   let fileHash;
+  let authMetaBytes = null;
   let metadataInput = null;
   let inputKind = 'unknown';
   let inputLength = 0;
   let signerPublicKey = null;
+  let signerFingerprintDigest = null;
 
   try {
     if (payload.file) {
@@ -342,15 +356,34 @@ async function handleSign(id, payload) {
       throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'file|text' });
     }
 
-    const ctxBytes = new TextEncoder().encode(DEFAULT_CTX);
+    const ctxBytes = new TextEncoder().encode(QSIG_V2_DEFAULT_CTX);
+    const signatureProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
+    const payloadDigestAlgId = HashAlgId.SHA3_512;
+    const authDigestAlgId = AuthDigestAlgId.SHA3_256;
 
-    const tbs = buildTBSV1({
-      formatVerMajor: FORMAT_VERSION_MAJOR,
-      formatVerMinor: FORMAT_VERSION_MINOR,
+    signerPublicKey = getPublicKeyFromSecret(parsedSecret.suiteId, parsedSecret.keyBytes);
+    signerFingerprintDigest = computeFingerprintBytes(signerPublicKey);
+    const signerFingerprintHex = bytesToHexLower(signerFingerprintDigest);
+    const signerFingerprint = packSignerFingerprint({
+      algId: FingerprintAlgId.SHA3_256,
+      digest: signerFingerprintDigest,
+    });
+
+    const authenticatedMetadata = {
+      signerPublicKey,
+      signerFingerprint,
+    };
+    const displayMetadata = normalizeMetadata(metadataInput);
+    authMetaBytes = packAuthenticatedMetadataV2(authenticatedMetadata);
+    const authMetaDigest = computeAuthMetaDigestV2(authMetaBytes, authDigestAlgId);
+
+    const tbs = buildTBSV2({
       suiteId: parsedSecret.suiteId,
-      hashAlgId: HashAlgId.SHA3_512,
-      ctxBytes,
-      fileHash,
+      signatureProfileId,
+      payloadDigestAlgId,
+      authDigestAlgId,
+      payloadDigest: fileHash,
+      authMetaDigest,
     });
 
     const signature = signBytes({
@@ -358,29 +391,20 @@ async function handleSign(id, payload) {
       message: tbs,
       secretKey: parsedSecret.keyBytes,
       hedged: true,
+      contextBytes: ctxBytes,
     });
 
-    signerPublicKey = getPublicKeyFromSecret(parsedSecret.suiteId, parsedSecret.keyBytes);
-    const signerFingerprintDigest = computeFingerprintBytes(signerPublicKey);
-    const signerFingerprintHex = bytesToHexLower(signerFingerprintDigest);
-    const signerFingerprint = packSignerFingerprint({
-      algId: FingerprintAlgId.SHA3_256,
-      digest: signerFingerprintDigest,
-    });
-
-    const metadata = {
-      ...normalizeMetadata(metadataInput),
-      signerPublicKey,
-      signerFingerprint,
-    };
-
-    const sigBytes = packSignatureV1({
+    const sigBytes = packSignatureV2({
       suiteId: parsedSecret.suiteId,
-      hashAlgId: HashAlgId.SHA3_512,
-      fileHash,
+      signatureProfileId,
+      payloadDigestAlgId,
+      authDigestAlgId,
+      payloadDigest: fileHash,
+      authMetaDigest,
       signature,
-      ctx: DEFAULT_CTX,
-      metadata,
+      ctx: QSIG_V2_DEFAULT_CTX,
+      authenticatedMetadata,
+      displayMetadata,
     });
 
     return {
@@ -389,8 +413,9 @@ async function handleSign(id, payload) {
       inputLength,
       suiteId: parsedSecret.suiteId,
       suiteName: suite.name,
-      hashAlgId: HashAlgId.SHA3_512,
-      hashAlgName: getHashName(HashAlgId.SHA3_512),
+      hashAlgId: payloadDigestAlgId,
+      hashAlgName: getHashName(payloadDigestAlgId),
+      context: QSIG_V2_DEFAULT_CTX,
       fileHashHex: bytesToHexLower(fileHash),
       signatureLength: signature.length,
       signerFingerprintHex,
@@ -399,6 +424,8 @@ async function handleSign(id, payload) {
   } finally {
     wipeBytes(parsedSecret.keyBytes);
     if (signerPublicKey) wipeBytes(signerPublicKey);
+    if (signerFingerprintDigest) wipeBytes(signerFingerprintDigest);
+    if (authMetaBytes) wipeBytes(authMetaBytes);
   }
 }
 
@@ -406,7 +433,7 @@ async function handleVerifyFile(id, payload) {
   validateRequired(payload.file, 'file');
   validateRequired(payload.sigFile, 'sigFile');
 
-  const parsedSig = unpackSignatureV1(payload.sigFile);
+  const parsedSig = unpackSignatureV2(payload.sigFile);
   assertSignatureLength(parsedSig.suiteId, parsedSig.signature);
   const computedHash = await hashFileSHA3512(payload.file, {
     chunkSize: payload.chunkSize,
@@ -427,6 +454,7 @@ async function handleVerifyFile(id, payload) {
       suiteId: parsedSig.suiteId,
       hashAlgId: parsedSig.hashAlgId,
       hashAlgName: getHashName(parsedSig.hashAlgId),
+      context: parsedSig.ctx,
       signatureLength: parsedSig.signature.length,
       signatureMetadataFingerprintHex: metadataFingerprintHex(parsedSig),
     };
@@ -446,7 +474,7 @@ async function handleVerifyText(_id, payload) {
     throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'text' });
   }
 
-  const parsedSig = unpackSignatureV1(payload.sigFile);
+  const parsedSig = unpackSignatureV2(payload.sigFile);
   assertSignatureLength(parsedSig.suiteId, parsedSig.signature);
   const textBytes = new TextEncoder().encode(payload.text);
   const providedHashBytes = hashBytesSHA3512(textBytes);
@@ -465,6 +493,7 @@ async function handleVerifyText(_id, payload) {
       suiteId: parsedSig.suiteId,
       hashAlgId: parsedSig.hashAlgId,
       hashAlgName: getHashName(parsedSig.hashAlgId),
+      context: parsedSig.ctx,
       signatureLength: parsedSig.signature.length,
       signatureMetadataFingerprintHex: metadataFingerprintHex(parsedSig),
     };

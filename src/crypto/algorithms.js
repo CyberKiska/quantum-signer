@@ -19,6 +19,7 @@ export const DEFAULT_SUITE_ID = SuiteId.ML_DSA_87;
 export const DEFAULT_SLH_SUITE_ID = SuiteId.SLH_DSA_SHAKE_128S;
 export const DEFAULT_HASH_ALG_ID = HashAlgId.SHA3_512;
 export const DEFAULT_CTX = 'quantum-signer/mvp/v1';
+export const QSIG_V2_DEFAULT_CTX = 'quantum-signer/v2';
 
 const SUITE_REGISTRY = new Map([
   [
@@ -150,12 +151,25 @@ export function getPublicKeyFromSecret(suiteId, secretKey) {
   return publicKey;
 }
 
-export function signBytes({ suiteId, message, secretKey, hedged = true }) {
+function normalizeContextBytes(contextBytes) {
+  if (contextBytes === undefined || contextBytes === null) return undefined;
+  validateBytes(contextBytes, 'contextBytes', 0);
+  assertCondition(contextBytes.length <= 255, ErrorCode.E_FORMAT_LENGTH, {
+    field: 'contextBytesLength',
+    max: 255,
+    actual: contextBytes.length,
+  });
+  return contextBytes;
+}
+
+export function signBytes({ suiteId, message, secretKey, hedged = true, contextBytes }) {
   const suite = getSuite(suiteId);
   validateBytes(message, 'message');
   assertKeyLength(suiteId, secretKey, 'secret');
+  const context = normalizeContextBytes(contextBytes);
 
   const opts = {};
+  if (context) opts.context = context;
   if (suite.family === 'ML-DSA' && hedged === false) {
     opts.extraEntropy = false;
   }
@@ -165,12 +179,14 @@ export function signBytes({ suiteId, message, secretKey, hedged = true }) {
   return signature;
 }
 
-export function verifyBytes({ suiteId, message, signature, publicKey }) {
+export function verifyBytes({ suiteId, message, signature, publicKey, contextBytes }) {
   const suite = getSuite(suiteId);
   validateBytes(message, 'message');
   assertSignatureLength(suiteId, signature);
   assertKeyLength(suiteId, publicKey, 'public');
-  return suite.signer.verify(signature, message, publicKey);
+  const context = normalizeContextBytes(contextBytes);
+  const opts = context ? { context } : {};
+  return suite.signer.verify(signature, message, publicKey, opts);
 }
 
 export async function hashFileSHA3512(file, { chunkSize = 4 * 1024 * 1024, onProgress } = {}) {
