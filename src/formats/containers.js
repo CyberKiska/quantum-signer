@@ -26,6 +26,7 @@ export const MAGIC_SIG = utf8ToBytes('PQSG');
 export const MAGIC_PQPK = utf8ToBytes('PQPK');
 export const MAGIC_PQSK = utf8ToBytes('PQSK');
 export const MAGIC_TBS = utf8ToBytes('QSTB');
+export const MAGIC_QSCX = utf8ToBytes('QSCX');
 
 export const SuiteId = Object.freeze({
   ML_DSA_44: 0x01,
@@ -34,6 +35,8 @@ export const SuiteId = Object.freeze({
   SLH_DSA_SHAKE_128S: 0x11,
   SLH_DSA_SHAKE_192S: 0x12,
   SLH_DSA_SHAKE_256S: 0x13,
+  FALCON_512_PADDED: 0x21,
+  FALCON_1024_PADDED: 0x22,
 });
 
 export const HashAlgId = Object.freeze({
@@ -46,6 +49,7 @@ export const FingerprintAlgId = Object.freeze({
 
 export const SignatureProfileId = Object.freeze({
   PQ_DETACHED_PURE_CONTEXT_V2: 0x01,
+  PQ_DETACHED_EXTERNAL_CONTEXT_V2: 0x02,
 });
 
 export const AuthDigestAlgId = Object.freeze({
@@ -59,6 +63,8 @@ export const SUITE_NAMES = Object.freeze({
   [SuiteId.SLH_DSA_SHAKE_128S]: 'SLH-DSA-SHAKE-128s',
   [SuiteId.SLH_DSA_SHAKE_192S]: 'SLH-DSA-SHAKE-192s',
   [SuiteId.SLH_DSA_SHAKE_256S]: 'SLH-DSA-SHAKE-256s',
+  [SuiteId.FALCON_512_PADDED]: 'Falcon-512-padded',
+  [SuiteId.FALCON_1024_PADDED]: 'Falcon-1024-padded',
 });
 
 export const HASH_NAMES = Object.freeze({
@@ -71,6 +77,7 @@ export const FINGERPRINT_NAMES = Object.freeze({
 
 export const SIGNATURE_PROFILE_NAMES = Object.freeze({
   [SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2]: 'PQ_DETACHED_PURE_CONTEXT_V2',
+  [SignatureProfileId.PQ_DETACHED_EXTERNAL_CONTEXT_V2]: 'PQ_DETACHED_EXTERNAL_CONTEXT_V2',
 });
 
 export const AUTH_DIGEST_NAMES = Object.freeze({
@@ -316,8 +323,30 @@ function ensureHashAlgIdSupported(hashAlgId) {
 }
 
 function ensureSignatureProfileIdSupported(signatureProfileId) {
-  if (signatureProfileId !== SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2) {
+  if (
+    signatureProfileId !== SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2 &&
+    signatureProfileId !== SignatureProfileId.PQ_DETACHED_EXTERNAL_CONTEXT_V2
+  ) {
     throw createError(ErrorCode.E_FORMAT_VERSION, { field: 'signatureProfileId', signatureProfileId });
+  }
+}
+
+function isFalconSuiteId(suiteId) {
+  return suiteId === SuiteId.FALCON_512_PADDED || suiteId === SuiteId.FALCON_1024_PADDED;
+}
+
+function ensureSignatureProfileCompatible(suiteId, signatureProfileId) {
+  const expectedProfileId = isFalconSuiteId(suiteId)
+    ? SignatureProfileId.PQ_DETACHED_EXTERNAL_CONTEXT_V2
+    : SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
+
+  if (signatureProfileId !== expectedProfileId) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, {
+      field: 'signatureProfileId',
+      suiteId,
+      signatureProfileId,
+      expectedProfileId,
+    });
   }
 }
 
@@ -563,6 +592,7 @@ export function buildTBSV2({
   ensureU8(formatVerMinor, 'formatVerMinor');
   ensureSuiteIdSupported(suiteId);
   ensureSignatureProfileIdSupported(signatureProfileId);
+  ensureSignatureProfileCompatible(suiteId, signatureProfileId);
   ensureHashAlgIdSupported(payloadDigestAlgId);
   ensureAuthDigestAlgIdSupported(authDigestAlgId);
   ensureLength(payloadDigest, FILE_HASH_LENGTH, ErrorCode.E_FORMAT_LENGTH, 'payloadDigest');
@@ -586,6 +616,38 @@ export function buildTBSV2({
   return out;
 }
 
+export function buildSignedMessageV2({
+  signatureProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
+  tbs,
+  ctxBytes,
+}) {
+  ensureSignatureProfileIdSupported(signatureProfileId);
+  ensureUint8Array(tbs, ErrorCode.E_FORMAT_LENGTH, 'tbs');
+
+  if (signatureProfileId === SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2) {
+    return tbs;
+  }
+
+  ensureUint8Array(ctxBytes, ErrorCode.E_FORMAT_LENGTH, 'ctxBytes');
+  assertMaxLength(ctxBytes.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
+  ensureU8(ctxBytes.length, 'ctxLen');
+  if (ctxBytes.length === 0) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'ctx', reason: 'required' });
+  }
+
+  const out = new Uint8Array(MAGIC_QSCX.length + 1 + 1 + 1 + ctxBytes.length + tbs.length);
+  let o = 0;
+  out.set(MAGIC_QSCX, o);
+  o += MAGIC_QSCX.length;
+  out[o++] = 0x01;
+  out[o++] = 0x00;
+  out[o++] = ctxBytes.length;
+  out.set(ctxBytes, o);
+  o += ctxBytes.length;
+  out.set(tbs, o);
+  return out;
+}
+
 export function packSignatureV2({
   suiteId,
   signatureProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
@@ -604,6 +666,7 @@ export function packSignatureV2({
   ensureU8(versionMinor, 'versionMinor');
   ensureSuiteIdSupported(suiteId);
   ensureSignatureProfileIdSupported(signatureProfileId);
+  ensureSignatureProfileCompatible(suiteId, signatureProfileId);
   ensureHashAlgIdSupported(payloadDigestAlgId);
   ensureAuthDigestAlgIdSupported(authDigestAlgId);
   ensureLength(payloadDigest, FILE_HASH_LENGTH, ErrorCode.E_FORMAT_LENGTH, 'payloadDigest');
@@ -702,6 +765,7 @@ export function unpackSignatureV2(sigBytes) {
   const authDigestAlgId = reader.u8(ErrorCode.E_FORMAT_TLV);
   ensureSuiteIdSupported(suiteId);
   ensureSignatureProfileIdSupported(signatureProfileId);
+  ensureSignatureProfileCompatible(suiteId, signatureProfileId);
   ensureHashAlgIdSupported(payloadDigestAlgId);
   ensureAuthDigestAlgIdSupported(authDigestAlgId);
 

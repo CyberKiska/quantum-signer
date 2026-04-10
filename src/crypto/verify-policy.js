@@ -63,6 +63,7 @@ function resolveVerificationCandidates(parsedSig, publicKeyFile) {
 function verifyWithCandidate(parsedSig, candidate) {
   const valid = verifyBytes({
     suiteId: parsedSig.suiteId,
+    signatureProfileId: parsedSig.signatureProfileId,
     message: parsedSig.tbs,
     signature: parsedSig.signature,
     publicKey: candidate.publicKey,

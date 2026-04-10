@@ -2,6 +2,7 @@ import {
   QSIG_DEFAULT_CTX,
   bytesToHexLower,
   computeFingerprintBytes,
+  getDefaultSignatureProfileId,
   generateKeypair,
   getPublicKeyFromSecret,
   getSuite,
@@ -43,11 +44,13 @@ const QUICK_TEST_SUITES = [
   SuiteId.ML_DSA_65,
   SuiteId.ML_DSA_87,
   SuiteId.SLH_DSA_SHAKE_128S,
+  SuiteId.FALCON_512_PADDED,
 ];
 
 const FULL_EXTRA_SUITES = [
   SuiteId.SLH_DSA_SHAKE_192S,
   SuiteId.SLH_DSA_SHAKE_256S,
+  SuiteId.FALCON_1024_PADDED,
 ];
 
 function textBytes(value) {
@@ -58,10 +61,15 @@ function buildContextBytes() {
   return textBytes(QSIG_DEFAULT_CTX);
 }
 
-function buildTbs(suiteId, fileHash, authMetaDigest) {
+function buildTbs(
+  suiteId,
+  fileHash,
+  authMetaDigest,
+  signatureProfileId = getDefaultSignatureProfileId(suiteId)
+) {
   return buildTBSV2({
     suiteId,
-    signatureProfileId: SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
+    signatureProfileId,
     payloadDigestAlgId: HashAlgId.SHA3_512,
     authDigestAlgId: AuthDigestAlgId.SHA3_256,
     payloadDigest: fileHash,
@@ -89,6 +97,7 @@ function getSecondAuthMetaRecordOffset(sigFile) {
 
 function buildSignatureContainer({ suiteId, payloadBytes, secretKey, publicKey, embeddedPublicKey = publicKey }) {
   const fileHash = hashBytesSHA3512(payloadBytes);
+  const signatureProfileId = getDefaultSignatureProfileId(suiteId);
   const signerFingerprint = packSignerFingerprint({
     algId: FingerprintAlgId.SHA3_256,
     digest: computeFingerprintBytes(embeddedPublicKey),
@@ -99,9 +108,10 @@ function buildSignatureContainer({ suiteId, payloadBytes, secretKey, publicKey, 
   };
   const authMetaBytes = packAuthenticatedMetadataV2(authenticatedMetadata);
   const authMetaDigest = computeAuthMetaDigestV2(authMetaBytes, AuthDigestAlgId.SHA3_256);
-  const tbs = buildTbs(suiteId, fileHash, authMetaDigest);
+  const tbs = buildTbs(suiteId, fileHash, authMetaDigest, signatureProfileId);
   const signature = signBytes({
     suiteId,
+    signatureProfileId,
     message: tbs,
     secretKey,
     hedged: true,
@@ -110,7 +120,7 @@ function buildSignatureContainer({ suiteId, payloadBytes, secretKey, publicKey, 
 
   const sigFile = packSignatureV2({
     suiteId,
-    signatureProfileId: SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
+    signatureProfileId,
     payloadDigestAlgId: HashAlgId.SHA3_512,
     authDigestAlgId: AuthDigestAlgId.SHA3_256,
     payloadDigest: fileHash,
@@ -170,6 +180,7 @@ function buildCases(suites) {
         const parsedSig = unpackSignatureV2(sigFile);
         const valid = verifyBytes({
           suiteId,
+          signatureProfileId: parsedSig.signatureProfileId,
           message: parsedSig.tbs,
           signature: parsedSig.signature,
           publicKey: parsedPublic.keyBytes,
@@ -203,9 +214,10 @@ function buildCases(suites) {
         if (bytesToHexLower(modifiedHash) === bytesToHexLower(parsedSig.fileHash)) {
           throw new Error('hash collision in self-test input vectors');
         }
-        const modifiedTbs = buildTbs(suiteId, modifiedHash, parsedSig.authMetaDigest);
+        const modifiedTbs = buildTbs(suiteId, modifiedHash, parsedSig.authMetaDigest, parsedSig.signatureProfileId);
         const valid = verifyBytes({
           suiteId,
+          signatureProfileId: parsedSig.signatureProfileId,
           message: modifiedTbs,
           signature: parsedSig.signature,
           publicKey: keys.publicKey,
@@ -234,6 +246,7 @@ function buildCases(suites) {
         const parsedSig = unpackSignatureV2(sigFile);
         const valid = verifyBytes({
           suiteId,
+          signatureProfileId: parsedSig.signatureProfileId,
           message: parsedSig.tbs,
           signature: parsedSig.signature,
           publicKey: keyB.publicKey,
@@ -260,9 +273,11 @@ function buildCases(suites) {
           signerFingerprint,
         });
         const authMetaDigest = computeAuthMetaDigestV2(authMetaBytes, AuthDigestAlgId.SHA3_256);
-        const tbs = buildTbs(suiteId, fileHash, authMetaDigest);
+        const signatureProfileId = getDefaultSignatureProfileId(suiteId);
+        const tbs = buildTbs(suiteId, fileHash, authMetaDigest, signatureProfileId);
         const signature = signBytes({
           suiteId,
+          signatureProfileId,
           message: tbs,
           secretKey: keys.secretKey,
           hedged: true,
@@ -273,6 +288,7 @@ function buildCases(suites) {
 
         const valid = verifyBytes({
           suiteId,
+          signatureProfileId,
           message: tbs,
           signature,
           publicKey: keys.publicKey,
@@ -302,6 +318,7 @@ function buildCases(suites) {
         const wrongContext = textBytes(`${QSIG_DEFAULT_CTX}/wrong`);
         const valid = verifyBytes({
           suiteId,
+          signatureProfileId: parsedSig.signatureProfileId,
           message: parsedSig.tbs,
           signature: parsedSig.signature,
           publicKey: keys.publicKey,
@@ -409,6 +426,46 @@ function buildCases(suites) {
       },
     });
   }
+
+  cases.push({
+    name: 'Falcon-512-padded: mutating stored .qsig context must break verification',
+    fn: async () => {
+      const suiteId = SuiteId.FALCON_512_PADDED;
+      const keys = generateKeypair(suiteId);
+      const payload = textBytes('falcon-stored-context-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      const originalCtxLen = tampered[108];
+      if (originalCtxLen === 0) {
+        throw new Error('test vector unexpectedly missing context');
+      }
+      tampered[QSIG_V2_SIG_HEADER_LENGTH] ^= 0x01;
+
+      const parsedSig = unpackSignatureV2(tampered);
+      if (parsedSig.ctx === QSIG_DEFAULT_CTX) {
+        throw new Error('stored context mutation did not change parsed context');
+      }
+
+      const valid = verifyBytes({
+        suiteId,
+        signatureProfileId: parsedSig.signatureProfileId,
+        message: parsedSig.tbs,
+        signature: parsedSig.signature,
+        publicKey: keys.publicKey,
+        contextBytes: parsedSig.ctxBytes,
+      });
+
+      if (valid) {
+        throw new Error('Falcon signature unexpectedly verified after stored context mutation');
+      }
+    },
+  });
 
   cases.push({
     name: 'malformed signature container must fail parse',

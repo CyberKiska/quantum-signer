@@ -23,11 +23,13 @@ import {
 
 const KEYGEN_TIMEOUT_MS = Object.freeze({
   ML_DSA: 60_000,
+  FALCON: 180_000,
   SLH_DSA: 300_000,
 });
 const SECRET_SESSION_TIMEOUT_MS = 60_000;
 
 const SLH_WARNING_TEXT = 'SLH-DSA generation is computationally intensive. It may take several minutes on mobile devices.';
+const FALCON_WARNING_TEXT = 'Falcon support here uses Falcon Round 3 padded signatures, not FN-DSA / FIPS-206.';
 
 function formatKeyInfo(state) {
   const lines = [];
@@ -149,15 +151,29 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   populateSuiteSelect(suiteSelect, suites, defaultSuiteId);
   infoEl.textContent = formatKeyInfo(state);
 
-  function isSlowSuite(suiteId) {
-    return suiteMap.get(suiteId)?.family === 'SLH-DSA';
+  function getSuiteFamily(suiteId) {
+    return suiteMap.get(suiteId)?.family || '';
+  }
+
+  function getSuiteWarningText(suiteId) {
+    const family = getSuiteFamily(suiteId);
+    if (family === 'SLH-DSA') return SLH_WARNING_TEXT;
+    if (family === 'Falcon') return FALCON_WARNING_TEXT;
+    return '';
+  }
+
+  function getKeygenTimeoutMs(suiteId) {
+    const family = getSuiteFamily(suiteId);
+    if (family === 'SLH-DSA') return KEYGEN_TIMEOUT_MS.SLH_DSA;
+    if (family === 'Falcon') return KEYGEN_TIMEOUT_MS.FALCON;
+    return KEYGEN_TIMEOUT_MS.ML_DSA;
   }
 
   function refreshSuiteWarning() {
     const suiteId = Number(suiteSelect.value);
-    const show = isSlowSuite(suiteId);
-    suiteWarningEl.classList.toggle('hidden', !show);
-    suiteWarningEl.textContent = show ? SLH_WARNING_TEXT : '';
+    const warningText = getSuiteWarningText(suiteId);
+    suiteWarningEl.classList.toggle('hidden', warningText.length === 0);
+    suiteWarningEl.textContent = warningText;
   }
 
   function updateExportButtons() {
@@ -183,14 +199,14 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
       generateBtn.textContent = 'Generating...';
 
       const suiteId = Number(suiteSelect.value);
-      const slowSuite = isSlowSuite(suiteId);
+      const showLongRunningToast = getSuiteFamily(suiteId) !== 'ML-DSA';
 
-      showToast('info', slowSuite ? 'Generating keypair... (this may take time)' : 'Generating keypair...');
+      showToast('info', showLongRunningToast ? 'Generating keypair... (this may take time)' : 'Generating keypair...');
 
       const result = await workerClient.call(
         'KEYGEN',
         { suiteId },
-        { timeoutMs: slowSuite ? KEYGEN_TIMEOUT_MS.SLH_DSA : KEYGEN_TIMEOUT_MS.ML_DSA }
+        { timeoutMs: getKeygenTimeoutMs(suiteId) }
       );
       await replaceSecretSession(state, workerClient, result, { exported: false });
 

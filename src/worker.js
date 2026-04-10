@@ -4,6 +4,7 @@ import {
   assertSignatureLength,
   bytesToHexLower,
   computeFingerprintBytes,
+  getDefaultSignatureProfileId,
   getSuite,
   hashBytesSHA3512,
   hashFileSHA3512,
@@ -22,7 +23,6 @@ import {
   AuthDigestAlgId,
   FingerprintAlgId,
   HashAlgId,
-  SignatureProfileId,
   buildTBSV2,
   computeAuthMetaDigestV2,
   getHashName,
@@ -247,7 +247,7 @@ async function handleSign(id, payload) {
     }
 
     const ctxBytes = new TextEncoder().encode(QSIG_DEFAULT_CTX);
-    const signatureProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
+    const signatureProfileId = getDefaultSignatureProfileId(session.suiteId);
     const payloadDigestAlgId = HashAlgId.SHA3_512;
     const authDigestAlgId = AuthDigestAlgId.SHA3_256;
 
@@ -278,6 +278,7 @@ async function handleSign(id, payload) {
 
     const signature = signBytes({
       suiteId: session.suiteId,
+      signatureProfileId,
       message: tbs,
       secretKey: session.secretKey,
       hedged: true,

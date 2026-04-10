@@ -1,4 +1,5 @@
 import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
+import { falcon512padded, falcon1024padded } from '@noble/post-quantum/falcon.js';
 import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import {
   slh_dsa_shake_128s,
@@ -13,7 +14,12 @@ import {
   assertFileSizeLimit,
   normalizeChunkSize,
 } from './policy.js';
-import { HashAlgId, SuiteId } from '../formats/containers.js';
+import {
+  HashAlgId,
+  SignatureProfileId,
+  SuiteId,
+  buildSignedMessageV2,
+} from '../formats/containers.js';
 import {
   assertCondition,
   validateBytes,
@@ -88,6 +94,26 @@ const SUITE_REGISTRY = new Map([
       defaultHedged: true,
     },
   ],
+  [
+    SuiteId.FALCON_512_PADDED,
+    {
+      id: SuiteId.FALCON_512_PADDED,
+      name: 'Falcon-512-padded',
+      family: 'Falcon',
+      signer: falcon512padded,
+      defaultHedged: true,
+    },
+  ],
+  [
+    SuiteId.FALCON_1024_PADDED,
+    {
+      id: SuiteId.FALCON_1024_PADDED,
+      name: 'Falcon-1024-padded',
+      family: 'Falcon',
+      signer: falcon1024padded,
+      defaultHedged: true,
+    },
+  ],
 ]);
 
 export function listSuites() {
@@ -111,6 +137,27 @@ export function getSuite(suiteId) {
     throw createError(ErrorCode.E_SUITE_UNSUPPORTED, { suiteId });
   }
   return suite;
+}
+
+export function getDefaultSignatureProfileId(suiteId) {
+  const suite = getSuite(suiteId);
+  return suite.family === 'Falcon'
+    ? SignatureProfileId.PQ_DETACHED_EXTERNAL_CONTEXT_V2
+    : SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
+}
+
+function assertSignatureProfileCompatible(suite, signatureProfileId) {
+  const expectedProfileId =
+    suite.family === 'Falcon'
+      ? SignatureProfileId.PQ_DETACHED_EXTERNAL_CONTEXT_V2
+      : SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
+
+  assertCondition(signatureProfileId === expectedProfileId, ErrorCode.E_FORMAT_VERSION, {
+    field: 'signatureProfileId',
+    suiteId: suite.id,
+    signatureProfileId,
+    expectedProfileId,
+  });
 }
 
 export function assertKeyLength(suiteId, keyBytes, kind) {
@@ -168,31 +215,62 @@ function normalizeContextBytes(contextBytes) {
   return contextBytes;
 }
 
-export function signBytes({ suiteId, message, secretKey, hedged = true, contextBytes }) {
+export function signBytes({
+  suiteId,
+  signatureProfileId = getDefaultSignatureProfileId(suiteId),
+  message,
+  secretKey,
+  hedged = true,
+  contextBytes,
+}) {
   const suite = getSuite(suiteId);
   validateBytes(message, 'message');
   assertKeyLength(suiteId, secretKey, 'secret');
   const context = normalizeContextBytes(contextBytes);
+  assertSignatureProfileCompatible(suite, signatureProfileId);
+  const signedMessage = buildSignedMessageV2({
+    signatureProfileId,
+    tbs: message,
+    ctxBytes: context,
+  });
 
   const opts = {};
-  if (context) opts.context = context;
+  if (signatureProfileId === SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2 && context) {
+    opts.context = context;
+  }
   if (suite.family === 'ML-DSA' && hedged === false) {
     opts.extraEntropy = false;
   }
 
-  const signature = suite.signer.sign(message, secretKey, opts);
+  const signature = suite.signer.sign(signedMessage, secretKey, opts);
   assertSignatureLength(suiteId, signature);
   return signature;
 }
 
-export function verifyBytes({ suiteId, message, signature, publicKey, contextBytes }) {
+export function verifyBytes({
+  suiteId,
+  signatureProfileId = getDefaultSignatureProfileId(suiteId),
+  message,
+  signature,
+  publicKey,
+  contextBytes,
+}) {
   const suite = getSuite(suiteId);
   validateBytes(message, 'message');
   assertSignatureLength(suiteId, signature);
   assertKeyLength(suiteId, publicKey, 'public');
   const context = normalizeContextBytes(contextBytes);
-  const opts = context ? { context } : {};
-  return suite.signer.verify(signature, message, publicKey, opts);
+  assertSignatureProfileCompatible(suite, signatureProfileId);
+  const signedMessage = buildSignedMessageV2({
+    signatureProfileId,
+    tbs: message,
+    ctxBytes: context,
+  });
+  const opts =
+    signatureProfileId === SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2 && context
+      ? { context }
+      : {};
+  return suite.signer.verify(signature, signedMessage, publicKey, opts);
 }
 
 export async function hashFileSHA3512(file, { chunkSize = DEFAULT_HASH_CHUNK_SIZE, onProgress } = {}) {
