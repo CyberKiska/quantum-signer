@@ -40,6 +40,9 @@ import {
 import { wipeBytes } from './bytes.js';
 
 const QSIG_V2_SIG_HEADER_LENGTH = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 64 + 32 + 1 + 1 + 2 + 2 + 4;
+const QSIG_V2_SIGNATURE_PROFILE_OFFSET = 7;
+const QSIG_V2_FLAGS_OFFSET = 10;
+const QSIG_V2_RESERVED_OFFSET = 109;
 
 const QUICK_TEST_SUITES = [
   SuiteId.ML_DSA_44,
@@ -452,6 +455,41 @@ function buildCases(suites) {
   }
 
   cases.push({
+    name: 'cross-suite loaded public key must be rejected',
+    fn: async () => {
+      const signingKeys = generateKeypair(SuiteId.ML_DSA_44);
+      const wrongSuiteKeys = generateKeypair(SuiteId.ML_DSA_65);
+      const payload = textBytes('cross-suite-key-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_44,
+        payloadBytes: payload,
+        secretKey: signingKeys.secretKey,
+        publicKey: signingKeys.publicKey,
+      });
+
+      const parsedSig = unpackSignatureV2(sigFile);
+      const wrongPublicKeyFile = packPublicKey({
+        suiteId: SuiteId.ML_DSA_65,
+        keyBytes: wrongSuiteKeys.publicKey,
+      });
+
+      let failed = false;
+      try {
+        finalizeVerification(parsedSig, wrongPublicKeyFile, {
+          inputKind: 'text',
+          inputLength: payload.length,
+        });
+      } catch (err) {
+        failed = err?.code === 'E_KEY_SUITE_MISMATCH';
+      }
+
+      if (!failed) {
+        throw new Error('cross-suite loaded public key unexpectedly bypassed suite check');
+      }
+    },
+  });
+
+  cases.push({
     name: 'Falcon-512-padded: mutating stored .qsig context must break verification',
     fn: async () => {
       const suiteId = SuiteId.FALCON_512_PADDED;
@@ -487,6 +525,120 @@ function buildCases(suites) {
 
       if (valid) {
         throw new Error('Falcon signature unexpectedly verified after stored context mutation');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'profile downgrade must fail parse',
+    fn: async () => {
+      const suiteId = SuiteId.FALCON_512_PADDED;
+      const keys = generateKeypair(suiteId);
+      const payload = textBytes('profile-downgrade-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      tampered[QSIG_V2_SIGNATURE_PROFILE_OFFSET] = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_VERSION';
+      }
+
+      if (!failed) {
+        throw new Error('profile downgrade unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'reserved byte must be zero',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('reserved-byte-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      tampered[QSIG_V2_RESERVED_OFFSET] = 0x01;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_FLAGS' && err?.details?.field === 'reserved';
+      }
+
+      if (!failed) {
+        throw new Error('non-zero reserved byte unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'unknown signature flag bits must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('unknown-flags-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      tampered[QSIG_V2_FLAGS_OFFSET] |= 0x80;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_FLAGS';
+      }
+
+      if (!failed) {
+        throw new Error('unknown signature flags unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'trailing bytes after signature must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('trailing-bytes-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = new Uint8Array(sigFile.length + 1);
+      tampered.set(sigFile, 0);
+      tampered[tampered.length - 1] = 0x00;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_LENGTH';
+      }
+
+      if (!failed) {
+        throw new Error('trailing bytes unexpectedly parsed');
       }
     },
   });
@@ -540,6 +692,35 @@ function buildCases(suites) {
 
       if (!failed) {
         throw new Error('tampered authenticated metadata unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'non-canonical display metadata TLV order must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('non-canonical-display-tlv-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      const { displayMetaOffset } = getDisplayMetadataOffsets(tampered);
+      tampered[displayMetaOffset] = 0x03;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'non_canonical_order';
+      }
+
+      if (!failed) {
+        throw new Error('non-canonical display metadata TLV order unexpectedly parsed');
       }
     },
   });
