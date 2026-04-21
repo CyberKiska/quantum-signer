@@ -56,7 +56,7 @@ Container includes:
 - authenticated signer metadata:
   - embedded public key
   - signer fingerprint record (`SHA3-256(pubkey)`)
-- display metadata (`filename`, `filesize`, `createdAt` ISO8601)
+- display metadata (`filename`, `filesize`, `createdAt` UTC ISO8601 with millisecond precision)
 - signature bytes (detached)
 
 Verification UI shows:

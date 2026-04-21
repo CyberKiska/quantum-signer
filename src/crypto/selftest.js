@@ -17,6 +17,7 @@ import {
   MAX_SIGNATURE_BYTES,
 } from './policy.js';
 import { createSecretSessionManager } from './secret-session.js';
+import { normalizeMetadata } from './validate.js';
 import { finalizeVerification } from './verify-policy.js';
 import {
   AuthDigestAlgId,
@@ -98,6 +99,16 @@ function getDisplayMetadataOffsets(sigFile) {
     displayMetaOffset,
     displayMetaLen,
   };
+}
+
+function getDisplayCreatedAtValueOffset(sigFile) {
+  const { displayMetaOffset } = getDisplayMetadataOffsets(sigFile);
+  const view = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
+  const firstLen = view.getUint16(displayMetaOffset + 1, true);
+  const secondOffset = displayMetaOffset + 3 + firstLen;
+  const secondLen = view.getUint16(secondOffset + 1, true);
+  const thirdOffset = secondOffset + 3 + secondLen;
+  return thirdOffset + 3;
 }
 
 function getSecondAuthMetaRecordOffset(sigFile) {
@@ -652,6 +663,50 @@ function buildCases(suites) {
 
       if (!failed) {
         throw new Error('invalid UTF-8 in stored context unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'non-canonical createdAt string must be rejected during normalization',
+    fn: async () => {
+      let failed = false;
+      try {
+        normalizeMetadata({ createdAt: '2025-01-01 00:00:00.000Z' });
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'invalid_iso8601';
+      }
+      if (!failed) {
+        throw new Error('non-canonical createdAt unexpectedly normalized');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'non-canonical createdAt in display metadata must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('invalid-created-at-format-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      const createdAtOffset = getDisplayCreatedAtValueOffset(tampered);
+      tampered[createdAtOffset + 10] = 0x20;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'createdAt_invalid';
+      }
+
+      if (!failed) {
+        throw new Error('non-canonical createdAt unexpectedly parsed');
       }
     },
   });

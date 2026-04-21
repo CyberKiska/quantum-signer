@@ -1,6 +1,7 @@
 import { sha3_256 } from '@noble/hashes/sha3.js';
 import { ErrorCode, createError } from '../crypto/errors.js';
 import { equalsBytes } from '../crypto/bytes.js';
+import { normalizeCanonicalUtcIso8601 } from '../crypto/time.js';
 import {
   MAX_AUTH_METADATA_BYTES,
   MAX_CONTEXT_BYTES,
@@ -239,11 +240,11 @@ function normalizeIso8601(value) {
     if (!trimmed) {
       throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_empty' });
     }
-    const ts = Date.parse(trimmed);
-    if (Number.isNaN(ts)) {
+    try {
+      return normalizeCanonicalUtcIso8601(trimmed);
+    } catch (_err) {
       throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid' });
     }
-    return new Date(ts).toISOString();
   }
   if (typeof value === 'number' || typeof value === 'bigint') {
     const seconds = Number(value);

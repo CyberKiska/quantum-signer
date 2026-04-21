@@ -1,4 +1,5 @@
 import { ErrorCode, createError } from './errors.js';
+import { normalizeCanonicalUtcIso8601 } from './time.js';
 import {
   FILE_HASH_LENGTH,
   KEY_FORMAT_VERSION_MAJOR,
@@ -83,11 +84,11 @@ function normalizeCreatedAt(value) {
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (!trimmed) return undefined;
-    const ts = Date.parse(trimmed);
-    if (Number.isNaN(ts)) {
+    try {
+      return normalizeCanonicalUtcIso8601(trimmed);
+    } catch (_err) {
       throw createError(ErrorCode.E_FORMAT_TLV, { field: 'createdAt', reason: 'invalid_iso8601' });
     }
-    return new Date(ts).toISOString();
   }
   if (typeof value === 'number' || typeof value === 'bigint') {
     const seconds = Number(value);
