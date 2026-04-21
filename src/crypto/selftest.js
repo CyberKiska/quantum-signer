@@ -897,8 +897,14 @@ function buildCases(suites) {
     name: 'assertSignatureLength must reject invalid configured expected length',
     fn: async () => {
       const suite = getSuite(SuiteId.ML_DSA_44);
-      const originalExpected = suite.signer.lengths.signature;
-      suite.signer.lengths.signature = undefined;
+      const originalSigner = suite.signer;
+      suite.signer = {
+        ...originalSigner,
+        lengths: {
+          ...originalSigner.lengths,
+          signature: undefined,
+        },
+      };
 
       let failed = false;
       try {
@@ -906,7 +912,7 @@ function buildCases(suites) {
       } catch (err) {
         failed = err?.code === 'E_FORMAT_LENGTH' && err?.details?.reason === 'invalid_expected_length';
       } finally {
-        suite.signer.lengths.signature = originalExpected;
+        suite.signer = originalSigner;
       }
 
       if (!failed) {

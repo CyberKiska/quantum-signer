@@ -1,6 +1,6 @@
 {
   "name": "quantum-signer",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "type": "module",
   "description": "Static client-only post-quantum file signing (ML-DSA / SLH-DSA)",
@@ -11,10 +11,10 @@
     "check": "npm run selftest && npm run build"
   },
   "dependencies": {
-    "@noble/hashes": "2.0.1",
-    "@noble/post-quantum": "0.6.0"
+    "@noble/hashes": "2.2.0",
+    "@noble/post-quantum": "0.6.1"
   },
   "devDependencies": {
-    "esbuild": "0.27.3"
+    "esbuild": "0.28.0"
   }
 }
