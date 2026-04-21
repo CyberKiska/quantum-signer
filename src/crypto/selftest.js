@@ -1,5 +1,6 @@
 import {
   QSIG_DEFAULT_CTX,
+  assertSignatureLength,
   bytesToHexLower,
   computeFingerprintBytes,
   getDefaultSignatureProfileId,
@@ -707,6 +708,28 @@ function buildCases(suites) {
 
       if (!failed) {
         throw new Error('non-canonical createdAt unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'assertSignatureLength must reject invalid configured expected length',
+    fn: async () => {
+      const suite = getSuite(SuiteId.ML_DSA_44);
+      const originalExpected = suite.signer.lengths.signature;
+      suite.signer.lengths.signature = undefined;
+
+      let failed = false;
+      try {
+        assertSignatureLength(SuiteId.ML_DSA_44, new Uint8Array(1));
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_LENGTH' && err?.details?.reason === 'invalid_expected_length';
+      } finally {
+        suite.signer.lengths.signature = originalExpected;
+      }
+
+      if (!failed) {
+        throw new Error('assertSignatureLength unexpectedly accepted invalid configured expected length');
       }
     },
   });

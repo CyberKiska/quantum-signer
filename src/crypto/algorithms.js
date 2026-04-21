@@ -178,14 +178,20 @@ export function assertSignatureLength(suiteId, signature) {
   const suite = getSuite(suiteId);
   validateBytes(signature, 'signature');
   const expected = suite.signer.lengths.signature;
-  if (typeof expected === 'number') {
-    assertCondition(signature.length === expected, ErrorCode.E_FORMAT_LENGTH, {
-      field: 'signatureLength',
+  if (!Number.isInteger(expected) || expected < 0) {
+    throw createError(ErrorCode.E_FORMAT_LENGTH, {
+      field: 'signatureLengthExpected',
       expected,
-      actual: signature.length,
       suiteId,
+      reason: 'invalid_expected_length',
     });
   }
+  assertCondition(signature.length === expected, ErrorCode.E_FORMAT_LENGTH, {
+    field: 'signatureLength',
+    expected,
+    actual: signature.length,
+    suiteId,
+  });
 }
 
 export function generateKeypair(suiteId) {
