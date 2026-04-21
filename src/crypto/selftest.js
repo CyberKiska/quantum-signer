@@ -88,6 +88,18 @@ function getAuthMetadataOffsets(sigFile) {
   };
 }
 
+function getDisplayMetadataOffsets(sigFile) {
+  const view = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
+  const ctxLen = sigFile[108];
+  const authMetaLen = view.getUint16(110, true);
+  const displayMetaLen = view.getUint16(112, true);
+  const displayMetaOffset = QSIG_V2_SIG_HEADER_LENGTH + ctxLen + authMetaLen;
+  return {
+    displayMetaOffset,
+    displayMetaLen,
+  };
+}
+
 function getSecondAuthMetaRecordOffset(sigFile) {
   const { authMetaOffset } = getAuthMetadataOffsets(sigFile);
   const view = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
@@ -574,6 +586,72 @@ function buildCases(suites) {
 
       if (!failed) {
         throw new Error('unsupported fingerprint alg unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'invalid UTF-8 in display filename must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('invalid-display-utf8-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      const { displayMetaOffset, displayMetaLen } = getDisplayMetadataOffsets(tampered);
+      if (displayMetaLen < 5) {
+        throw new Error('display metadata is unexpectedly too short for UTF-8 test');
+      }
+      tampered[displayMetaOffset + 3] = 0xc3;
+      tampered[displayMetaOffset + 4] = 0x28;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'invalid_utf8';
+      }
+
+      if (!failed) {
+        throw new Error('invalid UTF-8 in display filename unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'invalid UTF-8 in stored context must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('invalid-context-utf8-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const tampered = Uint8Array.from(sigFile);
+      const ctxLen = tampered[108];
+      if (ctxLen < 2) {
+        throw new Error('context is unexpectedly too short for UTF-8 test');
+      }
+      tampered[QSIG_V2_SIG_HEADER_LENGTH] = 0xc3;
+      tampered[QSIG_V2_SIG_HEADER_LENGTH + 1] = 0x28;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'invalid_utf8';
+      }
+
+      if (!failed) {
+        throw new Error('invalid UTF-8 in stored context unexpectedly parsed');
       }
     },
   });

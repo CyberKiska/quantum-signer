@@ -1,7 +1,7 @@
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+const decoder = new TextDecoder('utf-8', { fatal: true });
 
 function ensureBytes(value, field = 'bytes') {
   if (!(value instanceof Uint8Array)) {
