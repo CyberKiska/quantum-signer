@@ -134,13 +134,13 @@ This project is distributed under the terms of the GNU Affero General Public Lic
 
 ### Third‑party software licensed under other licenses
 
-Browser crypto tool libraries:
+Browser crypto tool libraries (see their version in the package.json):
 * SHA3-512 and SHA2-512 for hashing [noble-hashes](https://github.com/paulmillr/noble-hashes);
 * ML-DSA and SLH-DSA for post-quantum digital signature algorithms [noble-post-quantum](https://github.com/paulmillr/noble-post-quantum);
 
 The application incorporates the following dependencies that are released under the permissive MIT License.
 
-| Library               | Version | Copyright holder | Upstream repository                               |
-| --------------------- | ------- | ---------------- | ------------------------------------------------- |
-| noble-post-quantum    | 0.5.4   | Paul Miller      | https://github.com/paulmillr/noble-post-quantum   |
-| noble-hashes          | 2.0.1   | Paul Miller      | https://github.com/paulmillr/noble-hashes         |
+| Library               | Copyright holder | Upstream repository                               |
+| --------------------- | ---------------- | ------------------------------------------------- |
+| noble-post-quantum    | Paul Miller      | https://github.com/paulmillr/noble-post-quantum   |
+| noble-hashes          | Paul Miller      | https://github.com/paulmillr/noble-hashes         |
