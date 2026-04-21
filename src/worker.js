@@ -197,7 +197,10 @@ async function handleExportSecret(_id, payload) {
   if (typeof payload.secretSessionHandle !== 'string' || payload.secretSessionHandle.length === 0) {
     throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'secretSessionHandle' });
   }
-  const secretKeyFile = secretSessions.exportSecretKeyFile(payload.secretSessionHandle);
+  if (typeof payload.exportConsentToken !== 'string' || payload.exportConsentToken.length === 0) {
+    throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'exportConsentToken' });
+  }
+  const secretKeyFile = secretSessions.exportSecretKeyFile(payload.secretSessionHandle, payload.exportConsentToken);
   return { secretKeyFile };
 }
 

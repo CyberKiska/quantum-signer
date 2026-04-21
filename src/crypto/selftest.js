@@ -665,7 +665,7 @@ function buildCases(suites) {
     fn: async () => {
       const manager = createSecretSessionManager();
       const session = manager.generateSession(SuiteId.ML_DSA_65);
-      const exported = manager.exportSecretKeyFile(session.sessionHandle);
+      const exported = manager.exportSecretKeyFile(session.sessionHandle, session.exportConsentToken);
       const parsedSecret = unpackSecretKey(exported);
       const parsedPublic = unpackPublicKey(session.publicKeyFile);
       const derivedPublic = getPublicKeyFromSecret(parsedSecret.suiteId, parsedSecret.keyBytes);
@@ -679,6 +679,64 @@ function buildCases(suites) {
 
       if (!sameSuite || !samePublic) {
         throw new Error('exported secret key did not round-trip to stored public key');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'secret session export must require consent token',
+    fn: async () => {
+      const manager = createSecretSessionManager();
+      const session = manager.generateSession(SuiteId.ML_DSA_44);
+      let failed = false;
+      try {
+        manager.exportSecretKeyFile(session.sessionHandle);
+      } catch (_err) {
+        failed = true;
+      }
+
+      manager.clearAllSessions();
+
+      if (!failed) {
+        throw new Error('secret export unexpectedly succeeded without consent token');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'secret session export must reject wrong consent token',
+    fn: async () => {
+      const manager = createSecretSessionManager();
+      const session = manager.generateSession(SuiteId.ML_DSA_44);
+      let failed = false;
+      try {
+        manager.exportSecretKeyFile(session.sessionHandle, 'export-consent-wrong');
+      } catch (_err) {
+        failed = true;
+      }
+
+      manager.clearAllSessions();
+
+      if (!failed) {
+        throw new Error('secret export unexpectedly succeeded with wrong consent token');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'secret session handles must not use legacy sequential format',
+    fn: async () => {
+      const manager = createSecretSessionManager();
+      const sessionA = manager.generateSession(SuiteId.ML_DSA_44);
+      const sessionB = manager.generateSession(SuiteId.ML_DSA_44);
+
+      manager.clearAllSessions();
+
+      if (/^secret-session-\d+$/.test(sessionA.sessionHandle) || /^secret-session-\d+$/.test(sessionB.sessionHandle)) {
+        throw new Error('secret session handle still uses sequential format');
+      }
+      if (sessionA.sessionHandle === sessionB.sessionHandle) {
+        throw new Error('secret session handles unexpectedly collided');
       }
     },
   });

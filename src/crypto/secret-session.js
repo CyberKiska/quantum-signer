@@ -14,9 +14,20 @@ function cloneBytes(bytes) {
   return Uint8Array.from(bytes);
 }
 
+function randomOpaqueId(prefix) {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
+  }
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${prefix}-${hex}`;
+}
+
 function buildSessionSummary(handle, session) {
   return {
     sessionHandle: handle,
+    exportConsentToken: session.exportConsentToken,
     suiteId: session.suiteId,
     publicKeyLength: session.publicKey.length,
     secretKeyLength: session.secretKey.length,
@@ -31,7 +42,6 @@ function buildSessionSummary(handle, session) {
 
 export function createSecretSessionManager() {
   const sessions = new Map();
-  let nextHandle = 1;
 
   function createSession({ suiteId, secretKey, publicKey }) {
     assertKeyLength(suiteId, secretKey, 'secret');
@@ -39,11 +49,12 @@ export function createSecretSessionManager() {
     const sessionPublicKey = publicKey ? cloneBytes(publicKey) : getPublicKeyFromSecret(suiteId, sessionSecretKey);
     assertKeyLength(suiteId, sessionPublicKey, 'public');
 
-    const handle = `secret-session-${nextHandle++}`;
+    const handle = randomOpaqueId('secret-session');
     const session = {
       suiteId,
       secretKey: sessionSecretKey,
       publicKey: sessionPublicKey,
+      exportConsentToken: randomOpaqueId('export-consent'),
       fingerprintShort: computeFingerprint(sessionPublicKey, 8),
       fingerprintHex: computeFingerprintHex(sessionPublicKey),
     };
@@ -100,8 +111,14 @@ export function createSecretSessionManager() {
       }
     },
 
-    exportSecretKeyFile(handle) {
+    exportSecretKeyFile(handle, exportConsentToken) {
       const session = requireSession(handle);
+      if (typeof exportConsentToken !== 'string' || exportConsentToken.length === 0) {
+        throw createError(ErrorCode.E_EXPORT_AUTH, { field: 'exportConsentToken', reason: 'missing' });
+      }
+      if (session.exportConsentToken !== exportConsentToken) {
+        throw createError(ErrorCode.E_EXPORT_AUTH, { field: 'exportConsentToken', reason: 'mismatch', handle });
+      }
       return packSecretKey({
         suiteId: session.suiteId,
         keyBytes: session.secretKey,
