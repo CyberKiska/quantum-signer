@@ -30,7 +30,7 @@ const SECRET_SESSION_TIMEOUT_MS = 60_000;
 const secretExportConsentTokens = new Map();
 
 const SLH_WARNING_TEXT = 'SLH-DSA generation is computationally intensive. It may take several minutes on mobile devices.';
-const FALCON_WARNING_TEXT = 'Falcon support here uses Falcon Round 3 padded signatures, not FN-DSA / FIPS-206.';
+const FALCON_WARNING_TEXT = 'Experimental: Falcon support uses Round 3 padded signatures, not FN-DSA / FIPS-206, and may be incompatible with final FN-DSA.';
 
 function formatKeyInfo(state) {
   const lines = [];

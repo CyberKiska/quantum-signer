@@ -9,7 +9,7 @@ Static client-only web app for post-quantum detached signatures (`.qsig`) using 
 
 ## Features
 
-1. Key management: generate/import/export key pairs for ML-DSA and SLH-DSA.
+1. Key management: generate/import/export key pairs for ML-DSA, SLH-DSA, and experimental Falcon.
 2. Sign: select a file or text, review SHA3-512 payload digest and active signer, create detached signature, download `.qsig`.
 3. Verify: review original input digest and `.qsig` signer metadata before verification; get `VALID`/`INVALID` with technical details and trust caveats when only embedded signer metadata is available.
 
@@ -20,8 +20,9 @@ Static client-only web app for post-quantum detached signatures (`.qsig`) using 
 ### Algorithms and standards alignment
 
 Supported suites:
-- ML-DSA-44 / 65 / 87 (FIPS 204 family)
-- SLH-DSA-SHAKE-128s / 192s / 256s (FIPS 205 family)
+- ML-DSA-44 / 65 / 87 (FIPS 204 family; default pure-context profile)
+- SLH-DSA-SHAKE-128s / 192s / 256s (FIPS 205 family; default pure-context profile)
+- Falcon-512-padded / Falcon-1024-padded (experimental Falcon Round 3 support; not FN-DSA, not FIPS 206, and expected to be incompatible with final FN-DSA/FIPS 206)
 
 Hashing:
 - SHA3-512 payload digest (FIPS 202) for detached-content binding inside the current signed TBS payload.
@@ -29,7 +30,8 @@ Hashing:
 Important note:
 - This project follows the algorithm specifications and good implementation practices, but it is not a formally FIPS-validated module.
 - `qsig v2` uses a project-specific detached-signature container around standard ML-DSA / SLH-DSA signing.
-- Domain separation is carried through the standardized algorithm `context` parameter, and signer metadata is authenticated explicitly.
+- ML-DSA and SLH-DSA domain separation is carried through the standardized algorithm `context` parameter, and signer metadata is authenticated explicitly.
+- Falcon uses the `PQ_DETACHED_EXTERNAL_CONTEXT_V2` profile because the current noble Falcon API does not support the standardized `context` option. Quantum Signer signs `QSCX || wrapper-version || ctxLen || ctxBytes || TBS` for Falcon only. Treat this as an experimental interoperability boundary, not a NIST-standard Falcon/FN-DSA profile.
 
 ### Security model
 
@@ -47,7 +49,7 @@ Important note:
 
 Container includes:
 - `magic` + `version`
-- `suite id` (ML-DSA / SLH-DSA parameter set)
+- `suite id` (ML-DSA / SLH-DSA parameter set, or experimental Falcon parameter set)
 - `signature profile id`
 - `payload digest alg id` (`SHA3-512`)
 - `payload digest`

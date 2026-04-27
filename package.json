@@ -3,7 +3,7 @@
   "version": "1.1.2",
   "private": true,
   "type": "module",
-  "description": "Static client-only post-quantum file signing (ML-DSA / SLH-DSA)",
+  "description": "Static client-only post-quantum file signing (ML-DSA / SLH-DSA; experimental Falcon)",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
