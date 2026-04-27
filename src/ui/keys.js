@@ -48,11 +48,11 @@ function formatKeyInfo(state) {
   }
 
   if (state.keys.secret) {
-    lines.push(`SECRET KEY [${getSuiteName(state.keys.secret.suiteId)}]`);
+    lines.push(`PRIVATE KEY [${getSuiteName(state.keys.secret.suiteId)}]`);
     lines.push(`Fingerprint (SHA3-256): ${state.keys.secret.fingerprintHex}`);
     lines.push(`Size: ${state.keys.secret.secretKeyLength} bytes`);
     lines.push(`Exported: ${state.keys.secret.exported ? 'YES' : 'NO'}`);
-    lines.push('Warning: Secret key is isolated in worker session. Browser memory hygiene remains best-effort.');
+    lines.push('Warning: Private signing key is isolated in worker session. Browser memory hygiene remains best-effort.');
   }
 
   return lines.join('\n');
@@ -203,7 +203,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   suiteSelect.addEventListener('change', refreshSuiteWarning);
 
   generateBtn.addEventListener('click', async () => {
-    if (state.keys.secret && !confirm('A secret key is already loaded. Generating a new one will overwrite it. Continue?')) {
+    if (state.keys.secret && !confirm('A private key is already loaded. Generating a new one will overwrite it. Continue?')) {
       return;
     }
 
@@ -249,7 +249,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
         const sameSuite = parsed.suiteId === state.keys.public.suiteId;
         const sameKey = equalsBytes(parsed.keyBytes, state.keys.public.keyBytes);
         if (!sameSuite || !sameKey) {
-          throw new Error('Imported public key does not match loaded secret key. Clear session or import matching key pair.');
+          throw new Error('Imported public key does not match loaded private key. Clear session or import matching key pair.');
         }
       }
 
@@ -264,7 +264,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   });
 
   importSecretInput.addEventListener('change', async () => {
-    if (state.keys.secret && !confirm('A secret key is already loaded. Importing a new one will overwrite it. Continue?')) {
+    if (state.keys.secret && !confirm('A private key is already loaded. Importing a new one will overwrite it. Continue?')) {
       importSecretInput.value = '';
       return;
     }
@@ -284,7 +284,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
         const sameSuite = parsedPublic.suiteId === state.keys.public.suiteId;
         const sameKey = equalsBytes(parsedPublic.keyBytes, state.keys.public.keyBytes);
         if (!sameSuite || !sameKey) {
-          if (!confirm('Loaded public key does not match imported secret key. Replace active public key with derived one?')) {
+          if (!confirm('Loaded public key does not match imported private key. Replace active public key with derived one?')) {
             await clearSecretSession(workerClient, result.sessionHandle);
             importSecretInput.value = '';
             return;
@@ -294,7 +294,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
 
       await replaceSecretSession(state, workerClient, result, { exported: true });
       syncUi();
-      showToast('success', 'Secret key imported (public key synchronized)');
+      showToast('success', 'Private key imported (public key synchronized)');
     } catch (err) {
       showToast('error', workerFriendlyError(err));
     } finally {
@@ -315,7 +315,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     if (!state.keys.secret) return;
     if (
       !confirm(
-        'Exporting the secret key gives full control over signatures. Continue and write the secret key to a local file?'
+        'Exporting writes an unencrypted .pqsk private-key file. Anyone with this file can create signatures as this key. Continue?'
       )
     ) {
       return;
@@ -324,7 +324,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     try {
       const exportConsentToken = secretExportConsentTokens.get(state.keys.secret.sessionHandle);
       if (typeof exportConsentToken !== 'string' || exportConsentToken.length === 0) {
-        throw new Error('Secret export authorization is unavailable. Re-import or regenerate the secret key session.');
+        throw new Error('Private key export authorization is unavailable. Re-import or regenerate the private-key session.');
       }
       const result = await workerClient.call(
         'EXPORT_SECRET',
@@ -339,7 +339,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
       downloadBytes(name, secretKeyFile);
       state.keys.secret.exported = true;
       syncUi();
-      showToast('success', 'Secret key exported');
+      showToast('success', 'Private key exported');
     } catch (err) {
       showToast('error', workerFriendlyError(err));
     } finally {
