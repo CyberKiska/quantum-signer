@@ -42,6 +42,7 @@ import { wipeBytes } from './bytes.js';
 const QSIG_V2_SIG_HEADER_LENGTH = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 64 + 32 + 1 + 1 + 2 + 2 + 4;
 const QSIG_V2_SIGNATURE_PROFILE_OFFSET = 7;
 const QSIG_V2_FLAGS_OFFSET = 10;
+const QSIG_V2_DISPLAY_META_LEN_OFFSET = 112;
 const QSIG_V2_RESERVED_OFFSET = 109;
 
 const QUICK_TEST_SUITES = [
@@ -105,14 +106,31 @@ function getDisplayMetadataOffsets(sigFile) {
   };
 }
 
-function getDisplayCreatedAtValueOffset(sigFile) {
+function getDisplayCreatedAtRecordInfo(sigFile) {
   const { displayMetaOffset } = getDisplayMetadataOffsets(sigFile);
   const view = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
   const firstLen = view.getUint16(displayMetaOffset + 1, true);
   const secondOffset = displayMetaOffset + 3 + firstLen;
   const secondLen = view.getUint16(secondOffset + 1, true);
   const thirdOffset = secondOffset + 3 + secondLen;
-  return thirdOffset + 3;
+  const thirdLen = view.getUint16(thirdOffset + 1, true);
+  return {
+    createdAtRecordOffset: thirdOffset,
+    createdAtValueOffset: thirdOffset + 3,
+    createdAtValueLen: thirdLen,
+  };
+}
+
+function getDisplayCreatedAtValueOffset(sigFile) {
+  return getDisplayCreatedAtRecordInfo(sigFile).createdAtValueOffset;
+}
+
+function writeU64LEBytes(out, offset, value) {
+  let v = BigInt(value);
+  for (let i = 0; i < 8; i += 1) {
+    out[offset + i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
 }
 
 function getSecondAuthMetaRecordOffset(sigFile) {
@@ -884,11 +902,61 @@ function buildCases(suites) {
       try {
         unpackSignatureV2(tampered);
       } catch (err) {
-        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'createdAt_invalid';
+        failed =
+          err?.code === 'E_FORMAT_TLV' &&
+          (err?.details?.reason === 'createdAt_invalid' || err?.details?.reason === 'invalid_utf8');
       }
 
       if (!failed) {
         throw new Error('non-canonical createdAt unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'binary epoch createdAt in display metadata must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_87);
+      const payload = textBytes('binary-created-at-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_87,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const { displayMetaLen } = getDisplayMetadataOffsets(sigFile);
+      const {
+        createdAtRecordOffset,
+        createdAtValueOffset,
+        createdAtValueLen,
+      } = getDisplayCreatedAtRecordInfo(sigFile);
+      if (createdAtValueLen <= 8) {
+        throw new Error('createdAt value is unexpectedly too short for binary epoch test');
+      }
+
+      const shrink = createdAtValueLen - 8;
+      const createdAtValueEnd = createdAtValueOffset + createdAtValueLen;
+      const tampered = new Uint8Array(sigFile.length - shrink);
+      tampered.set(sigFile.subarray(0, createdAtValueOffset), 0);
+      tampered.set(sigFile.subarray(createdAtValueEnd), createdAtValueOffset + 8);
+
+      const view = new DataView(tampered.buffer, tampered.byteOffset, tampered.byteLength);
+      view.setUint16(QSIG_V2_DISPLAY_META_LEN_OFFSET, displayMetaLen - shrink, true);
+      view.setUint16(createdAtRecordOffset + 1, 8, true);
+      writeU64LEBytes(tampered, createdAtValueOffset, 1735689600n);
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed =
+          err?.code === 'E_FORMAT_TLV' &&
+          (err?.details?.reason === 'createdAt_invalid' || err?.details?.reason === 'invalid_utf8');
+      }
+
+      if (!failed) {
+        throw new Error('binary epoch createdAt unexpectedly parsed');
       }
     },
   });

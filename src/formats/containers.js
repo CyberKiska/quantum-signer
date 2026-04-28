@@ -507,11 +507,6 @@ function parseDisplayMetadataV2(displayMetaBytes) {
 }
 
 function parseCreatedAtValue(value) {
-  if (value.length === 8) {
-    const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
-    const epochSeconds = readU64LE(view, 0);
-    return new Date(Number(epochSeconds) * 1000).toISOString();
-  }
   const iso = decodeUtf8(value);
   return normalizeIso8601(iso);
 }
