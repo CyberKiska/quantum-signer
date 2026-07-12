@@ -26,7 +26,7 @@ const KEYGEN_TIMEOUT_MS = Object.freeze({
   FALCON: 180_000,
   SLH_DSA: 300_000,
 });
-const SECRET_SESSION_TIMEOUT_MS = 60_000;
+const SECRET_SESSION_TIMEOUT_MS = 360_000;
 const secretExportConsentTokens = new Map();
 
 const SLH_WARNING_TEXT = 'SLH-DSA generation is computationally intensive. It may take several minutes on mobile devices.';
@@ -127,11 +127,32 @@ async function clearSecretSession(workerClient, sessionHandle) {
 
 async function replaceSecretSession(state, workerClient, result, options = {}) {
   const previousHandle = state.keys.secret?.sessionHandle || null;
-  applySecretSessionIdentity(state, result, options);
-  rememberExportConsent(result);
-  if (previousHandle && previousHandle !== result.sessionHandle) {
-    forgetExportConsent(previousHandle);
-    await clearSecretSession(workerClient, previousHandle);
+  const ownsTransition = !state.keys.transitioning;
+  if (ownsTransition) {
+    state.keys.transitioning = true;
+    notifyKeysUpdated(state);
+  }
+  try {
+    if (previousHandle && previousHandle !== result.sessionHandle) {
+      await clearSecretSession(workerClient, previousHandle);
+      forgetExportConsent(previousHandle);
+    }
+    applySecretSessionIdentity(state, result, options);
+    rememberExportConsent(result);
+  } catch (err) {
+    forgetExportConsent(result.sessionHandle);
+    try {
+      await clearSecretSession(workerClient, result.sessionHandle);
+    } catch (_cleanupErr) {
+      // The worker may still complete a timed-out clear. Do not replace the
+      // active UI identity when the transaction itself did not complete.
+    }
+    throw err;
+  } finally {
+    if (ownsTransition) {
+      state.keys.transitioning = false;
+      notifyKeysUpdated(state);
+    }
   }
 }
 
@@ -160,6 +181,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
 
   const infoEl = byId('keys-info');
   const suiteMap = new Map(suites.map((suite) => [suite.id, suite]));
+  let keyOperationBusy = false;
 
   populateSuiteSelect(suiteSelect, suites, defaultSuiteId);
   infoEl.textContent = formatKeyInfo(state);
@@ -190,8 +212,30 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   }
 
   function updateExportButtons() {
-    exportPublicBtn.disabled = !state.keys.public;
-    exportSecretBtn.disabled = !state.keys.secret;
+    exportPublicBtn.disabled = keyOperationBusy || state.keys.transitioning || !state.keys.public;
+    exportSecretBtn.disabled = keyOperationBusy || state.keys.transitioning || !state.keys.secret;
+  }
+
+  function setKeyOperationBusy(busy) {
+    keyOperationBusy = busy;
+    generateBtn.disabled = busy;
+    suiteSelect.disabled = busy;
+    importPublicInput.disabled = busy;
+    importSecretInput.disabled = busy;
+    clearBtn.disabled = busy;
+    updateExportButtons();
+  }
+
+  function beginKeyTransition() {
+    state.keys.transitioning = true;
+    setKeyOperationBusy(true);
+    notifyKeysUpdated(state);
+  }
+
+  function endKeyTransition() {
+    state.keys.transitioning = false;
+    setKeyOperationBusy(false);
+    notifyKeysUpdated(state);
   }
 
   function syncUi() {
@@ -203,12 +247,13 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   suiteSelect.addEventListener('change', refreshSuiteWarning);
 
   generateBtn.addEventListener('click', async () => {
+    if (keyOperationBusy) return;
     if (state.keys.secret && !confirm('A private key is already loaded. Generating a new one will overwrite it. Continue?')) {
       return;
     }
 
     try {
-      generateBtn.disabled = true;
+      beginKeyTransition();
       generateBtn.textContent = 'Generating...';
 
       const suiteId = Number(suiteSelect.value);
@@ -228,16 +273,18 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     } catch (err) {
       showToast('error', workerFriendlyError(err));
     } finally {
-      generateBtn.disabled = false;
+      endKeyTransition();
       generateBtn.textContent = 'Generate Keypair';
     }
   });
 
   importPublicInput.addEventListener('change', async () => {
+    if (keyOperationBusy) return;
     const file = importPublicInput.files?.[0];
     if (!file) return;
 
     try {
+      beginKeyTransition();
       const bytes = await readFileAsBytes(file, { maxBytes: MAX_KEY_FILE_BYTES, field: 'publicKeyFile' });
       const parsed = unpackPublicKey(bytes);
       assertKeyLength(parsed.suiteId, parsed.keyBytes, 'public');
@@ -260,10 +307,12 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
       showToast('error', workerFriendlyError(err));
     } finally {
       importPublicInput.value = '';
+      endKeyTransition();
     }
   });
 
   importSecretInput.addEventListener('change', async () => {
+    if (keyOperationBusy) return;
     if (state.keys.secret && !confirm('A private key is already loaded. Importing a new one will overwrite it. Continue?')) {
       importSecretInput.value = '';
       return;
@@ -273,6 +322,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     if (!file) return;
 
     try {
+      beginKeyTransition();
       const result = await workerClient.call(
         'IMPORT_SECRET',
         { secretKeyFile: file },
@@ -299,6 +349,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
       showToast('error', workerFriendlyError(err));
     } finally {
       importSecretInput.value = '';
+      endKeyTransition();
     }
   });
 
@@ -312,6 +363,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   });
 
   exportSecretBtn.addEventListener('click', async () => {
+    if (keyOperationBusy) return;
     if (!state.keys.secret) return;
     if (
       !confirm(
@@ -322,6 +374,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     }
     let secretKeyFile = null;
     try {
+      setKeyOperationBusy(true);
       const exportConsentToken = secretExportConsentTokens.get(state.keys.secret.sessionHandle);
       if (typeof exportConsentToken !== 'string' || exportConsentToken.length === 0) {
         throw new Error('Private key export authorization is unavailable. Re-import or regenerate the private-key session.');
@@ -344,10 +397,12 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
       showToast('error', workerFriendlyError(err));
     } finally {
       if (secretKeyFile) wipeBytes(secretKeyFile);
+      setKeyOperationBusy(false);
     }
   });
 
   clearBtn.addEventListener('click', async () => {
+    if (keyOperationBusy) return;
     if (!state.keys.public && !state.keys.secret) return;
 
     const hasUnexported = (state.keys.public && !state.keys.public.exported) || (state.keys.secret && !state.keys.secret.exported);
@@ -358,19 +413,24 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
       }
     }
 
+    beginKeyTransition();
+    let cleared = false;
     try {
       if (state.keys.secret?.sessionHandle) {
         await clearSecretSession(workerClient, state.keys.secret.sessionHandle);
         forgetExportConsent(state.keys.secret.sessionHandle);
       }
+      wipePublicEntry(state.keys.public, { wipeContainer: true });
+      state.keys.public = null;
+      state.keys.secret = null;
+      cleared = true;
     } catch (err) {
       showToast('error', workerFriendlyError(err));
-      return;
+    } finally {
+      endKeyTransition();
     }
 
-    wipePublicEntry(state.keys.public, { wipeContainer: true });
-    state.keys.public = null;
-    state.keys.secret = null;
+    if (!cleared) return;
     syncUi();
     showToast('info', 'Session cleared');
   });

@@ -11,6 +11,8 @@ scripts/contract-check.mjs
 *.pqsk
 *.qsig
 examples/
+!test-vectors/
+!test-vectors/**/*.qsig
 
 # Notes
 *.md

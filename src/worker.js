@@ -8,7 +8,7 @@ import {
   getSuite,
   hashBytesSHA3512,
   hashFileSHA3512,
-  signBytes,
+  signBytesVerified,
 } from './crypto/algorithms.js';
 import { ErrorCode, createError, normalizeError } from './crypto/errors.js';
 import {
@@ -36,8 +36,9 @@ import {
   validateRequired,
 } from './crypto/validate.js';
 import { runSelfTest } from './crypto/selftest.js';
-import { wipeBytes } from './crypto/bytes.js';
+import { equalsBytes, wipeBytes } from './crypto/bytes.js';
 import { createSecretSessionManager } from './crypto/secret-session.js';
+import { utf8ToBytesStrict } from './crypto/text-encoding.js';
 import { finalizeVerification, getSignatureMetadataFingerprintHex } from './crypto/verify-policy.js';
 
 export const WorkerMessageType = Object.freeze({
@@ -54,6 +55,17 @@ export const WorkerMessageType = Object.freeze({
 });
 
 const secretSessions = createSecretSessionManager();
+
+function encodeUserText(text) {
+  try {
+    return utf8ToBytesStrict(text, 'text');
+  } catch (err) {
+    if (err instanceof RangeError || err instanceof TypeError) {
+      throw createError(ErrorCode.E_TEXT_ENCODING, { reason: err.message });
+    }
+    throw err;
+  }
+}
 
 const Handlers = {
   [WorkerMessageType.HASH_FILE]: handleHashFile,
@@ -155,7 +167,7 @@ async function handleHashText(_id, payload) {
   if (typeof payload.text !== 'string') {
     throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'text' });
   }
-  const textBytes = new TextEncoder().encode(payload.text);
+  const textBytes = encodeUserText(payload.text);
   assertBytesLimit(textBytes, MAX_TEXT_INPUT_BYTES, 'text');
   const hashBytes = hashBytesSHA3512(textBytes);
   return {
@@ -217,9 +229,6 @@ async function handleClearSecretSession(_id, payload) {
 async function handleSign(id, payload) {
   validateRequired(payload.secretSessionHandle, 'secretSessionHandle');
 
-  const session = secretSessions.getSession(payload.secretSessionHandle);
-  const suite = getSuite(session.suiteId);
-
   let fileHash;
   let authMetaBytes = null;
   let metadataInput = null;
@@ -227,6 +236,8 @@ async function handleSign(id, payload) {
   let inputLength = 0;
   let signerPublicKey = null;
   let signerFingerprintDigest = null;
+  let sessionLease = null;
+  let signature = null;
 
   try {
     if (payload.file) {
@@ -240,7 +251,7 @@ async function handleSign(id, payload) {
       metadataInput = defaultMetadataFromFile(payload.file);
     } else if (typeof payload.text === 'string') {
       inputKind = 'text';
-      const textBytes = new TextEncoder().encode(payload.text);
+      const textBytes = encodeUserText(payload.text);
       assertBytesLimit(textBytes, MAX_TEXT_INPUT_BYTES, 'text');
       inputLength = textBytes.length;
       fileHash = hashBytesSHA3512(textBytes);
@@ -249,7 +260,14 @@ async function handleSign(id, payload) {
       throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'file|text' });
     }
 
-    const ctxBytes = new TextEncoder().encode(QSIG_DEFAULT_CTX);
+    // Acquire key material only after all asynchronous hashing has completed.
+    // The lease prevents a concurrent clear/replace request from wiping the
+    // arrays while the synchronous sign-and-verify transaction is running.
+    sessionLease = secretSessions.acquireSession(payload.secretSessionHandle);
+    const { session } = sessionLease;
+    const suite = getSuite(session.suiteId);
+
+    const ctxBytes = utf8ToBytesStrict(QSIG_DEFAULT_CTX, 'context');
     const signatureProfileId = getDefaultSignatureProfileId(session.suiteId);
     const payloadDigestAlgId = HashAlgId.SHA3_512;
     const authDigestAlgId = AuthDigestAlgId.SHA3_256;
@@ -279,11 +297,12 @@ async function handleSign(id, payload) {
       authMetaDigest,
     });
 
-    const signature = signBytes({
+    signature = signBytesVerified({
       suiteId: session.suiteId,
       signatureProfileId,
       message: tbs,
       secretKey: session.secretKey,
+      publicKey: signerPublicKey,
       hedged: true,
       contextBytes: ctxBytes,
     });
@@ -300,14 +319,31 @@ async function handleSign(id, payload) {
       authenticatedMetadata,
       displayMetadata,
     });
+    const roundTrip = unpackSignatureV2(sigBytes);
+    if (
+      !equalsBytes(roundTrip.tbs, tbs) ||
+      !equalsBytes(roundTrip.ctxBytes, ctxBytes) ||
+      !equalsBytes(roundTrip.signature, signature) ||
+      !equalsBytes(roundTrip.authenticatedMetadata.signerPublicKey, signerPublicKey)
+    ) {
+      wipeBytes(sigBytes);
+      throw createError(ErrorCode.E_SIGN_SELF_VERIFY, {
+        reason: 'container_round_trip_mismatch',
+        suiteId: session.suiteId,
+      });
+    }
 
     return {
+      created: true,
+      selfVerified: true,
       valid: true,
       inputKind,
       inputLength,
       suiteId: session.suiteId,
       suiteName: suite.name,
+      signatureProfileId,
       hashAlgId: payloadDigestAlgId,
+      authDigestAlgId,
       hashAlgName: getHashName(payloadDigestAlgId),
       context: QSIG_DEFAULT_CTX,
       fileHashHex: bytesToHexLower(fileHash),
@@ -316,9 +352,11 @@ async function handleSign(id, payload) {
       sigBytes,
     };
   } finally {
+    if (signature) wipeBytes(signature);
     if (signerPublicKey) wipeBytes(signerPublicKey);
     if (signerFingerprintDigest) wipeBytes(signerFingerprintDigest);
     if (authMetaBytes) wipeBytes(authMetaBytes);
+    if (sessionLease) sessionLease.release();
   }
 }
 
@@ -342,6 +380,7 @@ async function handleVerifyFile(id, payload) {
     return {
       valid: false,
       cryptoValid: false,
+      trusted: false,
       inputKind: 'file',
       inputLength: Number(payload.file.size || 0),
       code: ErrorCode.E_FILE_HASH_MISMATCH,
@@ -350,7 +389,9 @@ async function handleVerifyFile(id, payload) {
       computedHashHex,
       signedHashHex,
       suiteId: parsedSig.suiteId,
+      signatureProfileId: parsedSig.signatureProfileId,
       hashAlgId: parsedSig.hashAlgId,
+      authDigestAlgId: parsedSig.authDigestAlgId,
       hashAlgName: getHashName(parsedSig.hashAlgId),
       context: parsedSig.ctx,
       signatureLength: parsedSig.signature.length,
@@ -358,12 +399,16 @@ async function handleVerifyFile(id, payload) {
     };
   }
 
-  return finalizeVerification(parsedSig, payload.publicKeyFile || null, {
-    inputKind: 'file',
-    inputLength: Number(payload.file.size || 0),
-    computedHashHex,
-    signedHashHex,
-  });
+  return {
+    signatureProfileId: parsedSig.signatureProfileId,
+    authDigestAlgId: parsedSig.authDigestAlgId,
+    ...finalizeVerification(parsedSig, payload.publicKeyFile || null, {
+      inputKind: 'file',
+      inputLength: Number(payload.file.size || 0),
+      computedHashHex,
+      signedHashHex,
+    }),
+  };
 }
 
 async function handleVerifyText(_id, payload) {
@@ -375,7 +420,7 @@ async function handleVerifyText(_id, payload) {
 
   const parsedSig = unpackSignatureV2(payload.sigFile);
   assertSignatureLength(parsedSig.suiteId, parsedSig.signature);
-  const textBytes = new TextEncoder().encode(payload.text);
+  const textBytes = encodeUserText(payload.text);
   assertBytesLimit(textBytes, MAX_TEXT_INPUT_BYTES, 'text');
   const providedHashBytes = hashBytesSHA3512(textBytes);
 
@@ -386,6 +431,7 @@ async function handleVerifyText(_id, payload) {
     return {
       valid: false,
       cryptoValid: false,
+      trusted: false,
       inputKind: 'text',
       inputLength: textBytes.length,
       code: ErrorCode.E_FILE_HASH_MISMATCH,
@@ -394,7 +440,9 @@ async function handleVerifyText(_id, payload) {
       providedHashHex,
       signedHashHex,
       suiteId: parsedSig.suiteId,
+      signatureProfileId: parsedSig.signatureProfileId,
       hashAlgId: parsedSig.hashAlgId,
+      authDigestAlgId: parsedSig.authDigestAlgId,
       hashAlgName: getHashName(parsedSig.hashAlgId),
       context: parsedSig.ctx,
       signatureLength: parsedSig.signature.length,
@@ -402,12 +450,16 @@ async function handleVerifyText(_id, payload) {
     };
   }
 
-  return finalizeVerification(parsedSig, payload.publicKeyFile || null, {
-    inputKind: 'text',
-    inputLength: textBytes.length,
-    providedHashHex,
-    signedHashHex,
-  });
+  return {
+    signatureProfileId: parsedSig.signatureProfileId,
+    authDigestAlgId: parsedSig.authDigestAlgId,
+    ...finalizeVerification(parsedSig, payload.publicKeyFile || null, {
+      inputKind: 'text',
+      inputLength: textBytes.length,
+      providedHashHex,
+      signedHashHex,
+    }),
+  };
 }
 
 async function handleSelfTest(id, payload) {

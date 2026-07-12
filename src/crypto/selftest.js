@@ -10,6 +10,7 @@ import {
   hashBytesSHA3512,
   hashFileSHA3512,
   signBytes,
+  signBytesVerified,
   verifyBytes,
 } from './algorithms.js';
 import {
@@ -38,6 +39,9 @@ import {
   unpackSignatureV2,
 } from '../formats/containers.js';
 import { wipeBytes } from './bytes.js';
+import { utf8ToBytesStrict } from './text-encoding.js';
+import { base64ToBytes, base64UrlToBytes } from '../formats/encoding.js';
+import { createOperationGate } from '../core/operation-gate.js';
 
 const QSIG_V2_SIG_HEADER_LENGTH = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 64 + 32 + 1 + 1 + 2 + 2 + 4;
 const QSIG_V2_SIGNATURE_PROFILE_OFFSET = 7;
@@ -199,6 +203,16 @@ async function runCase(name, fn) {
 
 function buildCases(suites) {
   const cases = [];
+
+  cases.push({
+    name: 'SHA3-512 FIPS 202 empty-message known-answer test',
+    fn: async () => {
+      const actual = bytesToHexLower(hashBytesSHA3512(new Uint8Array()));
+      const expected =
+        'a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26';
+      if (actual !== expected) throw new Error(`SHA3-512 KAT mismatch: ${actual}`);
+    },
+  });
 
   for (const suiteId of suites) {
     const suite = getSuite(suiteId);
@@ -394,7 +408,7 @@ function buildCases(suites) {
           inputLength: payload.length,
         });
 
-        if (!result.valid || !result.cryptoValid) {
+        if (!result.valid || !result.cryptoValid || result.trusted !== false) {
           throw new Error('embedded-only verification unexpectedly failed');
         }
         if (result.trustSource !== 'embedded-only' || result.verifiedKeySource !== 'signature') {
@@ -773,6 +787,37 @@ function buildCases(suites) {
   });
 
   cases.push({
+    name: 'unknown non-critical display metadata tag must be ignored',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_44);
+      const payload = textBytes('unknown-noncritical-tag-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_44,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+      const { displayMetaOffset, displayMetaLen } = getDisplayMetadataOffsets(sigFile);
+      const insertOffset = displayMetaOffset + displayMetaLen;
+      const extension = Uint8Array.of(0x04, 0x01, 0x00, 0x42);
+      const extended = new Uint8Array(sigFile.length + extension.length);
+      extended.set(sigFile.subarray(0, insertOffset), 0);
+      extended.set(extension, insertOffset);
+      extended.set(sigFile.subarray(insertOffset), insertOffset + extension.length);
+      new DataView(extended.buffer).setUint16(
+        QSIG_V2_DISPLAY_META_LEN_OFFSET,
+        displayMetaLen + extension.length,
+        true
+      );
+
+      const parsed = unpackSignatureV2(extended);
+      if (parsed.displayMetadata.filename !== 'self-test.txt') {
+        throw new Error('known display metadata changed while ignoring non-critical extension');
+      }
+    },
+  });
+
+  cases.push({
     name: 'unsupported signer fingerprint alg id must fail parse',
     fn: async () => {
       const keys = generateKeypair(SuiteId.ML_DSA_87);
@@ -904,7 +949,7 @@ function buildCases(suites) {
       } catch (err) {
         failed =
           err?.code === 'E_FORMAT_TLV' &&
-          (err?.details?.reason === 'createdAt_invalid' || err?.details?.reason === 'invalid_utf8');
+          (err?.details?.reason === 'createdAt_invalid_iso8601' || err?.details?.reason === 'invalid_utf8');
       }
 
       if (!failed) {
@@ -952,7 +997,7 @@ function buildCases(suites) {
       } catch (err) {
         failed =
           err?.code === 'E_FORMAT_TLV' &&
-          (err?.details?.reason === 'createdAt_invalid' || err?.details?.reason === 'invalid_utf8');
+          (err?.details?.reason === 'createdAt_invalid_iso8601' || err?.details?.reason === 'invalid_utf8');
       }
 
       if (!failed) {
@@ -1171,6 +1216,139 @@ function buildCases(suites) {
       if (!cleared || !failed) {
         throw new Error('cleared secret session remained accessible');
       }
+    },
+  });
+
+  cases.push({
+    name: 'secret session clear must defer wiping until active lease release',
+    fn: async () => {
+      const manager = createSecretSessionManager();
+      const sessionSummary = manager.generateSession(SuiteId.ML_DSA_44);
+      const lease = manager.acquireSession(sessionSummary.sessionHandle);
+      const secretReference = lease.session.secretKey;
+      const publicReference = lease.session.publicKey;
+      if (!secretReference.some((byte) => byte !== 0) || !publicReference.some((byte) => byte !== 0)) {
+        throw new Error('generated session unexpectedly contains all-zero key material');
+      }
+
+      if (!manager.clearSession(sessionSummary.sessionHandle)) {
+        throw new Error('leased session clear was not accepted');
+      }
+      if (!secretReference.some((byte) => byte !== 0) || !publicReference.some((byte) => byte !== 0)) {
+        throw new Error('leased key material was wiped during an active operation');
+      }
+
+      let inaccessible = false;
+      try {
+        manager.getSession(sessionSummary.sessionHandle);
+      } catch (_err) {
+        inaccessible = true;
+      }
+      if (!inaccessible) throw new Error('cleared leased session accepted a new operation');
+
+      lease.release();
+      if (secretReference.some((byte) => byte !== 0) || publicReference.some((byte) => byte !== 0)) {
+        throw new Error('deferred session wipe did not run after lease release');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'post-sign self-verification must reject an inconsistent expanded ML-DSA key',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_44);
+      const corruptedSecret = Uint8Array.from(keys.secretKey);
+      corruptedSecret[64] ^= 0x01;
+      const reconstructedPublic = getPublicKeyFromSecret(SuiteId.ML_DSA_44, corruptedSecret);
+      let rejected = false;
+      try {
+        signBytesVerified({
+          suiteId: SuiteId.ML_DSA_44,
+          message: textBytes('private-key-consistency-check'),
+          secretKey: corruptedSecret,
+          publicKey: reconstructedPublic,
+          hedged: true,
+          contextBytes: buildContextBytes(),
+        });
+      } catch (err) {
+        rejected = err?.code === 'E_SIGN_SELF_VERIFY';
+      } finally {
+        wipeBytes(corruptedSecret);
+        wipeBytes(reconstructedPublic);
+        wipeBytes(keys.secretKey);
+        wipeBytes(keys.publicKey);
+      }
+      if (!rejected) throw new Error('inconsistent expanded ML-DSA key was not rejected after signing');
+    },
+  });
+
+  cases.push({
+    name: 'strict UTF-8 input encoding must reject unpaired surrogates',
+    fn: async () => {
+      let rejected = false;
+      try {
+        utf8ToBytesStrict('\ud800', 'text');
+      } catch (err) {
+        rejected = err instanceof RangeError;
+      }
+      if (!rejected) throw new Error('unpaired surrogate unexpectedly encoded');
+      const valid = utf8ToBytesStrict('A\ud83d\ude80', 'text');
+      if (valid.length !== 5) throw new Error('valid surrogate pair encoded to unexpected length');
+    },
+  });
+
+  cases.push({
+    name: 'base64 decoders must reject non-canonical alphabets and pad bits',
+    fn: async () => {
+      if (base64ToBytes('AA==')[0] !== 0 || base64UrlToBytes('_w')[0] !== 0xff) {
+        throw new Error('canonical base64 decoding failed');
+      }
+      for (const value of ['AB==', 'AA']) {
+        let rejected = false;
+        try {
+          base64ToBytes(value);
+        } catch (_err) {
+          rejected = true;
+        }
+        if (!rejected) throw new Error(`non-canonical base64 unexpectedly accepted: ${value}`);
+      }
+      for (const value of ['/w', '_x']) {
+        let rejected = false;
+        try {
+          base64UrlToBytes(value);
+        } catch (_err) {
+          rejected = true;
+        }
+        if (!rejected) throw new Error(`non-canonical base64url unexpectedly accepted: ${value}`);
+      }
+    },
+  });
+
+  cases.push({
+    name: 'operation gate must reject stale completions and concurrent starts',
+    fn: async () => {
+      const gate = createOperationGate();
+      const first = gate.begin();
+      let concurrentRejected = false;
+      try {
+        gate.begin();
+      } catch (_err) {
+        concurrentRejected = true;
+      }
+      if (!concurrentRejected || !gate.isCurrent(first)) {
+        throw new Error('operation gate failed active-operation invariant');
+      }
+      gate.invalidate();
+      if (gate.isCurrent(first) || !gate.busy) {
+        throw new Error('operation gate accepted stale completion or cleared busy state too early');
+      }
+      gate.finish(first);
+      const second = gate.begin();
+      if (!gate.isCurrent(second) || second === first) {
+        throw new Error('operation gate failed to start a new generation');
+      }
+      gate.finish(second);
+      if (gate.busy) throw new Error('operation gate remained busy after completion');
     },
   });
 

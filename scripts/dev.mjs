@@ -20,10 +20,14 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
 };
 
+const DOCUMENT_CSP = "default-src 'self'; connect-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+const WORKER_CSP = "default-src 'none'; connect-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'";
+
 async function serveFile(urlPath) {
   const filePath = path.join(distDir, urlPath === '/' ? 'index.html' : urlPath.replace(/^\//, ''));
   const normalized = path.normalize(filePath);
-  if (!normalized.startsWith(distDir)) {
+  const relative = path.relative(distDir, normalized);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
     return { status: 403, body: 'Forbidden', type: 'text/plain; charset=utf-8' };
   }
 
@@ -48,7 +52,14 @@ async function main() {
     try {
       const url = req.url || '/';
       const response = await serveFile(url);
-      res.writeHead(response.status, { 'Content-Type': response.type });
+      const headers = {
+        'Content-Type': response.type,
+        'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'no-referrer',
+      };
+      if (url.endsWith('/assets/worker.js')) headers['Content-Security-Policy'] = WORKER_CSP;
+      else if (url === '/' || url.endsWith('/index.html')) headers['Content-Security-Policy'] = DOCUMENT_CSP;
+      res.writeHead(response.status, headers);
       res.end(response.body);
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });

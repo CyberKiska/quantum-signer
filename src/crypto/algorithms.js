@@ -7,6 +7,7 @@ import {
   slh_dsa_shake_256s,
 } from '@noble/post-quantum/slh-dsa.js';
 import { ErrorCode, createError } from './errors.js';
+import { wipeBytes } from './bytes.js';
 import {
   DEFAULT_HASH_CHUNK_SIZE,
   MAX_CONTEXT_BYTES,
@@ -27,6 +28,7 @@ import {
   validateSuiteId,
 } from './validate.js';
 import { bytesToHexLower, hexToBytesStrict } from '../formats/encoding.js';
+import { getSuiteWireLengths } from './suite-metadata.js';
 
 export const DEFAULT_SUITE_ID = SuiteId.ML_DSA_87;
 export const DEFAULT_SLH_SUITE_ID = SuiteId.SLH_DSA_SHAKE_128S;
@@ -115,6 +117,18 @@ const SUITE_REGISTRY = new Map([
     },
   ],
 ]);
+
+for (const [suiteId, entry] of SUITE_REGISTRY) {
+  const wire = getSuiteWireLengths(suiteId);
+  if (
+    !wire ||
+    entry.signer.lengths.publicKey !== wire.publicKey ||
+    entry.signer.lengths.secretKey !== wire.secretKey ||
+    entry.signer.lengths.signature !== wire.signature
+  ) {
+    throw createError(ErrorCode.E_INTERNAL, { reason: 'suite_wire_length_drift', suiteId });
+  }
+}
 
 export function listSuites() {
   return Array.from(SUITE_REGISTRY.values()).map((entry) => ({
@@ -244,13 +258,38 @@ export function signBytes({
   if (signatureProfileId === SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2 && context) {
     opts.context = context;
   }
-  if (suite.family === 'ML-DSA' && hedged === false) {
+  if ((suite.family === 'ML-DSA' || suite.family === 'SLH-DSA') && hedged === false) {
     opts.extraEntropy = false;
   }
 
   const signature = suite.signer.sign(signedMessage, secretKey, opts);
   assertSignatureLength(suiteId, signature);
   return signature;
+}
+
+export function signBytesVerified({ publicKey, ...signOptions }) {
+  assertKeyLength(signOptions.suiteId, publicKey, 'public');
+  const signature = signBytes(signOptions);
+  try {
+    const valid = verifyBytes({
+      suiteId: signOptions.suiteId,
+      signatureProfileId: signOptions.signatureProfileId,
+      message: signOptions.message,
+      signature,
+      publicKey,
+      contextBytes: signOptions.contextBytes,
+    });
+    if (!valid) {
+      throw createError(ErrorCode.E_SIGN_SELF_VERIFY, {
+        reason: 'post_sign_verification_failed',
+        suiteId: signOptions.suiteId,
+      });
+    }
+    return signature;
+  } catch (err) {
+    wipeBytes(signature);
+    throw err;
+  }
 }
 
 export function verifyBytes({
@@ -276,7 +315,12 @@ export function verifyBytes({
     signatureProfileId === SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2 && context
       ? { context }
       : {};
-  return suite.signer.verify(signature, signedMessage, publicKey, opts);
+  try {
+    return suite.signer.verify(signature, signedMessage, publicKey, opts) === true;
+  } catch (err) {
+    if (err instanceof RangeError || err instanceof TypeError) return false;
+    throw err;
+  }
 }
 
 export async function hashFileSHA3512(file, { chunkSize = DEFAULT_HASH_CHUNK_SIZE, onProgress } = {}) {

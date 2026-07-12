@@ -1,12 +1,14 @@
-import { QSIG_DEFAULT_CTX } from '../crypto/algorithms.js';
+import { QSIG_DEFAULT_CTX, getDefaultSignatureProfileId } from '../crypto/algorithms.js';
 import { wipeBytes } from '../crypto/bytes.js';
-import { HashAlgId, getHashName, getSuiteName } from '../formats/containers.js';
+import { AuthDigestAlgId, HashAlgId, getHashName, getSuiteName } from '../formats/containers.js';
+import { createOperationGate } from '../core/operation-gate.js';
 import {
   byId,
   downloadBytes,
   formatBytes,
   resetProgress,
   setProgress,
+  safeReviewText,
   showToast,
   shortHex,
   workerFriendlyError,
@@ -36,7 +38,7 @@ function setBadge(badgeEl, tone, text) {
 function describeInput(mode, file, text, inputLength) {
   if (mode === 'file') {
     if (!file) return 'Waiting for file selection';
-    return `File: ${file.name} (${formatBytes(inputLength ?? file.size)})`;
+    return `File: ${safeReviewText(file.name)} (${formatBytes(inputLength ?? file.size)})`;
   }
 
   if (!text.length) return 'Waiting for plain text input';
@@ -65,6 +67,7 @@ export function setupSignTab(state, workerClient) {
   const resultEl = byId('sign-result');
 
   let previewSeq = 0;
+  const signGate = createOperationGate();
   let previewTimer = null;
   let previewState = {
     status: 'idle',
@@ -78,6 +81,10 @@ export function setupSignTab(state, workerClient) {
       wipeBytes(state.sign.lastSignature.bytes);
     }
     state.sign.lastSignature = null;
+  }
+
+  function invalidateSignOperation() {
+    signGate.invalidate();
   }
 
   function invalidateLastSignature() {
@@ -119,7 +126,8 @@ export function setupSignTab(state, workerClient) {
   }
 
   function updateExecuteState() {
-    executeBtn.disabled = !(state.keys.secret && previewState.status === 'ready');
+    executeBtn.disabled =
+      signGate.busy || state.keys.transitioning || !(state.keys.secret && previewState.status === 'ready');
   }
 
   function renderReview() {
@@ -127,7 +135,7 @@ export function setupSignTab(state, workerClient) {
     const lines = [];
 
     lines.push(describeInput(mode, file, text, previewState.inputLength));
-    lines.push(`Context: ${QSIG_DEFAULT_CTX}`);
+    lines.push(`Context: ${safeReviewText(QSIG_DEFAULT_CTX)}`);
 
     if (state.keys.secret) {
       lines.push(
@@ -232,7 +240,19 @@ export function setupSignTab(state, workerClient) {
 
   function schedulePreviewRefresh({ debounceText = false } = {}) {
     cancelPreview();
+    invalidateSignOperation();
     invalidateLastSignature();
+    const input = getCurrentInput();
+    if (!hasInput(input)) {
+      setPreviewState({ status: 'idle', hashHex: null, inputLength: null, error: null });
+      return;
+    }
+    setPreviewState({
+      status: 'loading',
+      hashHex: null,
+      inputLength: input.mode === 'file' ? input.file.size : null,
+      error: null,
+    });
     if (debounceText && getInputMode() === 'text') {
       previewTimer = setTimeout(() => {
         previewTimer = null;
@@ -244,6 +264,7 @@ export function setupSignTab(state, workerClient) {
   }
 
   function resetUi() {
+    invalidateSignOperation();
     cancelPreview();
     clearLastSignature();
     modeFileEl.checked = true;
@@ -273,7 +294,12 @@ export function setupSignTab(state, workerClient) {
       showToast('warning', 'Please provide plain text to sign');
       return;
     }
-    if (!state.keys.secret) {
+    const secretEntry = state.keys.secret;
+    if (state.keys.transitioning) {
+      showToast('warning', 'Wait for the active key update to complete');
+      return;
+    }
+    if (!secretEntry) {
       showToast('warning', 'Please load a secret key first (Keys tab)');
       return;
     }
@@ -286,14 +312,29 @@ export function setupSignTab(state, workerClient) {
       return;
     }
 
+    if (signGate.busy) return;
+
+    const reviewSnapshot = {
+      hashHex: previewState.hashHex,
+      inputLength: previewState.inputLength,
+      suiteId: secretEntry.suiteId,
+      signatureProfileId: getDefaultSignatureProfileId(secretEntry.suiteId),
+      hashAlgId: HashAlgId.SHA3_512,
+      authDigestAlgId: AuthDigestAlgId.SHA3_256,
+      context: QSIG_DEFAULT_CTX,
+      signerFingerprintHex: secretEntry.fingerprintHex,
+      secretSessionHandle: secretEntry.sessionHandle,
+    };
+    const operationToken = signGate.begin();
+
     try {
-      executeBtn.disabled = true;
+      updateExecuteState();
       downloadBtn.disabled = true;
-      const slowSuite = isSlowSigningSuite(state.keys.secret.suiteId);
+      const slowSuite = isSlowSigningSuite(reviewSnapshot.suiteId);
       showToast('info', slowSuite ? 'Signing... (this may take time)' : 'Signing...');
 
       const payload = {
-        secretSessionHandle: state.keys.secret.sessionHandle,
+        secretSessionHandle: reviewSnapshot.secretSessionHandle,
       };
       if (input.mode === 'file') payload.file = input.file;
       else payload.text = input.text;
@@ -306,6 +347,26 @@ export function setupSignTab(state, workerClient) {
       }
 
       const result = await workerClient.call('SIGN', payload, callOptions);
+
+      if (!signGate.isCurrent(operationToken)) {
+        if (result.sigBytes) wipeBytes(result.sigBytes);
+        return;
+      }
+      if (
+        result.created !== true ||
+        result.selfVerified !== true ||
+        result.fileHashHex !== reviewSnapshot.hashHex ||
+        result.inputLength !== reviewSnapshot.inputLength ||
+        result.suiteId !== reviewSnapshot.suiteId ||
+        result.signatureProfileId !== reviewSnapshot.signatureProfileId ||
+        result.hashAlgId !== reviewSnapshot.hashAlgId ||
+        result.authDigestAlgId !== reviewSnapshot.authDigestAlgId ||
+        result.context !== reviewSnapshot.context ||
+        result.signerFingerprintHex !== reviewSnapshot.signerFingerprintHex
+      ) {
+        if (result.sigBytes) wipeBytes(result.sigBytes);
+        throw new Error('Signing result does not match the reviewed input or signer; output was discarded.');
+      }
 
       clearLastSignature();
 
@@ -326,8 +387,9 @@ export function setupSignTab(state, workerClient) {
       downloadBtn.disabled = false;
       showToast('success', 'Signature created successfully');
     } catch (err) {
-      showToast('error', workerFriendlyError(err));
+      if (signGate.isCurrent(operationToken)) showToast('error', workerFriendlyError(err));
     } finally {
+      signGate.finish(operationToken);
       updateExecuteState();
       resetProgress(progressEl, progressLabelEl);
     }
@@ -377,6 +439,7 @@ export function setupSignTab(state, workerClient) {
   resetBtn.addEventListener('click', resetUi);
 
   window.addEventListener('keys:updated', () => {
+    invalidateSignOperation();
     invalidateLastSignature();
     renderReview();
   });

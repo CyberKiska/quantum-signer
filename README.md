@@ -13,6 +13,8 @@ Static client-only web app for post-quantum detached signatures (`.qsig`) using 
 2. Sign: select a file or text, review SHA3-512 payload digest and active signer, create detached signature, download `.qsig`.
 3. Verify: review original input digest and `.qsig` signer metadata before verification; get `VALID`/`INVALID` with technical details and trust caveats when only embedded signer metadata is available.
 
+Trust states are intentionally distinct: verification with a user-supplied public key may be shown as `VALID`; verification using only the key embedded in `.qsig` is shown as `UNTRUSTED` even when the cryptographic signature is internally consistent.
+
 ------------
 
 ## Architecture
@@ -40,11 +42,15 @@ Important note:
 - `keys stay in browser`: public key data lives in UI session; private signing key bytes are isolated in a dedicated worker session with no server round-trips.
   This worker boundary is a defense against accidental UI-layer exposure and routine app bugs, not against same-origin code execution.
 - `zero-trust delivery still applies`: if the page origin is compromised by XSS, an injected same-origin script, a malicious browser extension, or a tampered build, that code runs with the same origin privileges as the app and can still drive export flows or exfiltrate secrets.
+- `deployment headers are required`: the hosting layer must serve CSP for both the document and worker, including `frame-ancestors 'none'` on the document response. The in-document CSP cannot enforce `frame-ancestors`; the runtime also refuses framed execution as defense in depth.
 - `private key export is separately authorized`: exporting a private signing key now requires both the worker session handle and a per-session export consent token that is kept out of app state and issued only when the private-key session is created/imported.
 - `private key files are raw secrets`: exported `.pqsk` files contain unencrypted private signing key material. The file CRC32 detects accidental corruption only; it does not provide confidentiality, authenticity, or tamper resistance. Store `.pqsk` files like any other signing secret.
 - Key/signature lengths are validated against selected suite before signing/verifying.
 - Browser-facing inputs are bounded by explicit policy limits for payloads, key files, signature containers, context, and metadata blocks.
 - Detached signature format is versioned and parsed defensively.
+- Signing holds a worker-side session lease and self-verifies every generated signature before any `.qsig` output is returned.
+- Sign and verify results are bound to immutable review snapshots; stale asynchronous completions are discarded.
+- Text mode rejects unpaired UTF-16 surrogates. File mode should be used whenever exact source bytes and line endings matter.
 
 ### Detached signature format (`.qsig`)
 
@@ -70,6 +76,12 @@ Verification UI shows:
 - computed vs signed hash,
 - trust caveat when verification succeeds only with embedded signer metadata,
 - key mismatch diagnostics when loaded and embedded public keys disagree.
+
+Scope boundaries:
+- `.qsig` authenticates one exact payload byte string and the authenticated signer metadata defined by the format.
+- It does not authenticate filesystem filename, MIME type, file/text mode, semantic schema, archive paths/order, or reconstruction rules.
+- Display metadata is unauthenticated and MUST NOT be used for paths, policy, reconstruction, identity, or trust decisions.
+- The v2 authenticated-metadata digest and signer fingerprint use SHA3-256, so their classical collision strength is capped at 128 bits. A future breaking format revision is required to raise this without changing v2 semantics.
 
 ------------
 

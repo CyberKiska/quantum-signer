@@ -2,6 +2,7 @@ import { sha3_256 } from '@noble/hashes/sha3.js';
 import { ErrorCode, createError } from '../crypto/errors.js';
 import { equalsBytes } from '../crypto/bytes.js';
 import { normalizeCanonicalUtcIso8601 } from '../crypto/time.js';
+import { SuiteId, getSuiteWireLengths } from '../crypto/suite-metadata.js';
 import {
   MAX_AUTH_METADATA_BYTES,
   MAX_CONTEXT_BYTES,
@@ -29,16 +30,7 @@ export const MAGIC_PQSK = utf8ToBytes('PQSK');
 export const MAGIC_TBS = utf8ToBytes('QSTB');
 export const MAGIC_QSCX = utf8ToBytes('QSCX');
 
-export const SuiteId = Object.freeze({
-  ML_DSA_44: 0x01,
-  ML_DSA_65: 0x02,
-  ML_DSA_87: 0x03,
-  SLH_DSA_SHAKE_128S: 0x11,
-  SLH_DSA_SHAKE_192S: 0x12,
-  SLH_DSA_SHAKE_256S: 0x13,
-  FALCON_512_PADDED: 0x21,
-  FALCON_1024_PADDED: 0x22,
-});
+export { SuiteId };
 
 export const HashAlgId = Object.freeze({
   SHA3_512: 0x01,
@@ -312,7 +304,7 @@ function decodeTLVBlock(bytes) {
 }
 
 function ensureSuiteIdSupported(suiteId) {
-  if (!Object.values(SuiteId).includes(suiteId)) {
+  if (!getSuiteWireLengths(suiteId)) {
     throw createError(ErrorCode.E_SUITE_UNSUPPORTED, { suiteId });
   }
 }
@@ -485,7 +477,6 @@ function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDi
   ensureLength(expectedDigest, AUTH_META_DIGEST_LENGTH, ErrorCode.E_FORMAT_TLV, 'authMetaDigest');
 
   const records = decodeTLVBlock(authMetaBytes);
-  ensureOnlyAllowedTags(records, new Set([MetadataTag.SIGNER_PUBLIC_KEY, MetadataTag.SIGNER_FINGERPRINT]), 'authMeta');
   const metadata = parseMetadata(records);
   if (!(metadata.signerPublicKey instanceof Uint8Array) || !(metadata.signerFingerprint instanceof Uint8Array)) {
     throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMeta', reason: 'missing_signer_binding' });
@@ -502,13 +493,16 @@ function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDi
 function parseDisplayMetadataV2(displayMetaBytes) {
   assertBytesLimit(displayMetaBytes, MAX_DISPLAY_METADATA_BYTES, 'displayMetaBytes', ErrorCode.E_FORMAT_LENGTH);
   const records = decodeTLVBlock(displayMetaBytes);
-  ensureOnlyAllowedTags(records, new Set([MetadataTag.FILENAME, MetadataTag.FILESIZE, MetadataTag.CREATED_AT]), 'displayMeta');
   return parseMetadata(records);
 }
 
 function parseCreatedAtValue(value) {
   const iso = decodeUtf8(value);
-  return normalizeIso8601(iso);
+  try {
+    return normalizeCanonicalUtcIso8601(iso);
+  } catch (_err) {
+    throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid_iso8601' });
+  }
 }
 
 function parseMetadata(records) {
@@ -677,6 +671,9 @@ export function packSignatureV2({
   }
 
   const authMetaBytes = packAuthenticatedMetadataV2(authenticatedMetadata);
+  const wireLengths = getSuiteWireLengths(suiteId);
+  ensureLength(authenticatedMetadata.signerPublicKey, wireLengths.publicKey, ErrorCode.E_FORMAT_LENGTH, 'signerPublicKey');
+  ensureLength(signature, wireLengths.signature, ErrorCode.E_FORMAT_LENGTH, 'signature');
   const recomputedAuthMetaDigest = computeAuthMetaDigestV2(authMetaBytes, authDigestAlgId);
   if (!equalsBytes(recomputedAuthMetaDigest, authMetaDigest)) {
     throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMetaDigest', reason: 'mismatch_at_pack' });
@@ -808,6 +805,9 @@ export function unpackSignatureV2(sigBytes) {
 
   const authenticatedMetadata = parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, authMetaDigest);
   const displayMetadata = parseDisplayMetadataV2(displayMetaBytes);
+  const wireLengths = getSuiteWireLengths(suiteId);
+  ensureLength(authenticatedMetadata.signerPublicKey, wireLengths.publicKey, ErrorCode.E_FORMAT_LENGTH, 'signerPublicKey');
+  ensureLength(signature, wireLengths.signature, ErrorCode.E_FORMAT_LENGTH, 'signature');
   const metadata = { ...displayMetadata, ...authenticatedMetadata };
 
   const hasFilename = displayMetadata.filename !== undefined;
@@ -863,6 +863,9 @@ function buildKeyFile({ magic, suiteId, keyBytes, versionMajor, versionMinor }) 
   ensureU8(versionMinor, 'versionMinor');
   ensureSuiteIdSupported(suiteId);
   ensureUint8Array(keyBytes, ErrorCode.E_FORMAT_LENGTH, 'keyBytes');
+  const wireLengths = getSuiteWireLengths(suiteId);
+  const expectedKeyLength = equalsBytes(magic, MAGIC_PQPK) ? wireLengths.publicKey : wireLengths.secretKey;
+  ensureLength(keyBytes, expectedKeyLength, ErrorCode.E_FORMAT_LENGTH, 'keyBytes');
   assertMaxLength(keyBytes.length, MAX_KEY_BYTES, 'keyLen', ErrorCode.E_FORMAT_LENGTH);
   ensureU32(keyBytes.length, 'keyLen');
 
@@ -918,6 +921,16 @@ function parseKeyFile(bytes, expectedMagic) {
   }
 
   const keyLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
+  const wireLengths = getSuiteWireLengths(suiteId);
+  const expectedKeyLength = equalsBytes(expectedMagic, MAGIC_PQPK) ? wireLengths.publicKey : wireLengths.secretKey;
+  if (keyLen !== expectedKeyLength) {
+    throw createError(ErrorCode.E_FORMAT_LENGTH, {
+      field: 'keyLen',
+      expected: expectedKeyLength,
+      actual: keyLen,
+      suiteId,
+    });
+  }
   assertMaxLength(keyLen, MAX_KEY_BYTES, 'keyLen', ErrorCode.E_FORMAT_LENGTH);
   const expectedTotal = 4 + 1 + 1 + 1 + 1 + 4 + keyLen + 4;
   if (bytes.length !== expectedTotal) {

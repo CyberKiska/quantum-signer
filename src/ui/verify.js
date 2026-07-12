@@ -1,12 +1,15 @@
 import { MAX_SIGNATURE_FILE_BYTES } from '../crypto/policy.js';
+import { wipeBytes } from '../crypto/bytes.js';
 import { bytesToHexLower } from '../formats/encoding.js';
 import { HashAlgId, getHashName, getSuiteName, unpackSignatureV2 } from '../formats/containers.js';
+import { createOperationGate } from '../core/operation-gate.js';
 import {
   byId,
   formatBytes,
   readFileAsBytes,
   resetProgress,
   setProgress,
+  safeReviewText,
   showToast,
   workerFriendlyError,
 } from './common.js';
@@ -37,7 +40,7 @@ function setBadge(badgeEl, tone, text) {
 function describeVerifyInput(mode, file, text, inputLength) {
   if (mode === 'file') {
     if (!file) return 'Original input: waiting for file selection';
-    return `Original input: ${file.name} (${formatBytes(inputLength ?? file.size)})`;
+    return `Original input: ${safeReviewText(file.name)} (${formatBytes(inputLength ?? file.size)})`;
   }
 
   if (!text.length) return 'Original input: waiting for plain text';
@@ -81,6 +84,7 @@ function renderVerifyResult(result) {
   const lines = [];
   lines.push(`Valid: ${result.valid ? 'YES' : 'NO'}`);
   lines.push(`Cryptographic verification: ${result.cryptoValid ? 'YES' : 'NO'}`);
+  lines.push(`Externally supplied verification key accepted: ${result.trusted ? 'YES' : 'NO'}`);
   lines.push(`Trust source: ${describeTrustSource(result)}`);
   lines.push(`Verified key source: ${describeVerifiedKeySource(result)}`);
   lines.push(`Input type: ${result.inputKind}`);
@@ -88,7 +92,7 @@ function renderVerifyResult(result) {
 
   if (result.suiteId) lines.push(`Algorithm: ${getSuiteName(result.suiteId)}`);
   if (result.hashAlgName) lines.push(`Payload digest: ${result.hashAlgName}`);
-  if (result.context) lines.push(`Context: ${result.context}`);
+  if (result.context) lines.push(`Context: ${safeReviewText(result.context)}`);
   if (typeof result.signatureLength === 'number') lines.push(`Signature size: ${result.signatureLength} bytes`);
 
   if (result.signerFingerprintHex) lines.push(`Verification key fingerprint (SHA3-256): ${result.signerFingerprintHex}`);
@@ -143,6 +147,7 @@ export function setupVerifyTab(state, workerClient) {
   let inputPreviewSeq = 0;
   let inputPreviewTimer = null;
   let signaturePreviewSeq = 0;
+  const verifyGate = createOperationGate();
 
   let inputPreview = {
     status: 'idle',
@@ -155,9 +160,13 @@ export function setupVerifyTab(state, workerClient) {
     status: 'idle',
     error: null,
     suiteId: null,
+    signatureProfileId: null,
+    hashAlgId: null,
+    authDigestAlgId: null,
     hashAlgName: null,
     context: null,
     signatureLength: null,
+    payloadDigestHex: null,
     embeddedFingerprintHex: null,
     displayFilename: null,
     displayFilesize: null,
@@ -193,6 +202,10 @@ export function setupVerifyTab(state, workerClient) {
     resultDetails.textContent = '';
     setResultTone(null, '-');
     setResultCaveat('');
+  }
+
+  function invalidateVerifyOperation() {
+    verifyGate.invalidate();
   }
 
   function getInputMode() {
@@ -233,7 +246,8 @@ export function setupVerifyTab(state, workerClient) {
   }
 
   function updateVerifyButtonState() {
-    verifyBtn.disabled = !(inputPreview.status === 'ready' && signaturePreview.status === 'ready');
+    verifyBtn.disabled =
+      verifyGate.busy || state.keys.transitioning || !(inputPreview.status === 'ready' && signaturePreview.status === 'ready');
   }
 
   function renderReview() {
@@ -255,22 +269,28 @@ export function setupVerifyTab(state, workerClient) {
     if (!sigFile) {
       lines.push('Signature file: waiting for .qsig selection');
     } else {
-      lines.push(`Signature file: ${sigFile.name} (${formatBytes(sigFile.size)})`);
+      lines.push(`Signature file: ${safeReviewText(sigFile.name)} (${formatBytes(sigFile.size)})`);
     }
 
     if (signaturePreview.status === 'ready') {
       lines.push(`Declared algorithm: ${getSuiteName(signaturePreview.suiteId)}`);
       lines.push(`Declared payload digest: ${signaturePreview.hashAlgName}`);
-      lines.push(`Context: ${signaturePreview.context}`);
+      lines.push(`Context: ${safeReviewText(signaturePreview.context)}`);
       lines.push(`Embedded signer fingerprint (SHA3-256): ${signaturePreview.embeddedFingerprintHex}`);
       if (signaturePreview.displayFilename) {
-        lines.push(`Display filename: ${signaturePreview.displayFilename}`);
+        lines.push(`Unauthenticated display filename: ${safeReviewText(signaturePreview.displayFilename)}`);
       }
       if (signaturePreview.displayFilesize !== null) {
-        lines.push(`Display filesize: ${signaturePreview.displayFilesize} bytes`);
+        lines.push(`Unauthenticated display filesize: ${signaturePreview.displayFilesize} bytes`);
+        if (
+          inputPreview.status === 'ready' &&
+          String(inputPreview.inputLength) !== signaturePreview.displayFilesize
+        ) {
+          lines.push('Warning: unauthenticated display filesize does not match the reviewed input.');
+        }
       }
       if (signaturePreview.displayCreatedAt) {
-        lines.push(`Display createdAt: ${signaturePreview.displayCreatedAt}`);
+        lines.push(`Unauthenticated display createdAt: ${safeReviewText(signaturePreview.displayCreatedAt)}`);
       }
     } else if (signaturePreview.status === 'loading') {
       lines.push('Signature metadata: parsing .qsig...');
@@ -393,7 +413,19 @@ export function setupVerifyTab(state, workerClient) {
 
   function scheduleInputPreviewRefresh({ debounceText = false } = {}) {
     cancelInputPreview();
+    invalidateVerifyOperation();
     hideResultCard();
+    const input = getCurrentInput();
+    if (!hasVerifyInput(input)) {
+      setInputPreview({ status: 'idle', hashHex: null, inputLength: null, error: null });
+      return;
+    }
+    setInputPreview({
+      status: 'loading',
+      hashHex: null,
+      inputLength: input.mode === 'file' ? input.file.size : null,
+      error: null,
+    });
     if (debounceText && getInputMode() === 'text') {
       inputPreviewTimer = setTimeout(() => {
         inputPreviewTimer = null;
@@ -407,6 +439,7 @@ export function setupVerifyTab(state, workerClient) {
   async function refreshSignaturePreview() {
     const sigFile = sigInput.files?.[0] ?? null;
     const token = ++signaturePreviewSeq;
+    invalidateVerifyOperation();
     hideResultCard();
 
     if (!sigFile) {
@@ -414,9 +447,13 @@ export function setupVerifyTab(state, workerClient) {
         status: 'idle',
         error: null,
         suiteId: null,
+        signatureProfileId: null,
+        hashAlgId: null,
+        authDigestAlgId: null,
         hashAlgName: null,
         context: null,
         signatureLength: null,
+        payloadDigestHex: null,
         embeddedFingerprintHex: null,
         displayFilename: null,
         displayFilesize: null,
@@ -431,9 +468,13 @@ export function setupVerifyTab(state, workerClient) {
       status: 'loading',
       error: null,
       suiteId: null,
+      signatureProfileId: null,
+      hashAlgId: null,
+      authDigestAlgId: null,
       hashAlgName: null,
       context: null,
       signatureLength: null,
+      payloadDigestHex: null,
       embeddedFingerprintHex: null,
       displayFilename: null,
       displayFilesize: null,
@@ -455,9 +496,13 @@ export function setupVerifyTab(state, workerClient) {
         status: 'ready',
         error: null,
         suiteId: parsedSig.suiteId,
+        signatureProfileId: parsedSig.signatureProfileId,
+        hashAlgId: parsedSig.payloadDigestAlgId,
+        authDigestAlgId: parsedSig.authDigestAlgId,
         hashAlgName: getHashName(parsedSig.payloadDigestAlgId),
         context: parsedSig.ctx,
         signatureLength: parsedSig.signatureLength,
+        payloadDigestHex: bytesToHexLower(parsedSig.payloadDigest),
         embeddedFingerprintHex,
         displayFilename: parsedSig.displayMetadata?.filename || null,
         displayFilesize:
@@ -472,9 +517,13 @@ export function setupVerifyTab(state, workerClient) {
         status: 'error',
         error: workerFriendlyError(err),
         suiteId: null,
+        signatureProfileId: null,
+        hashAlgId: null,
+        authDigestAlgId: null,
         hashAlgName: null,
         context: null,
         signatureLength: null,
+        payloadDigestHex: null,
         embeddedFingerprintHex: null,
         displayFilename: null,
         displayFilesize: null,
@@ -524,6 +573,15 @@ export function setupVerifyTab(state, workerClient) {
     }
 
     if (result.valid) {
+      if (!result.trusted) {
+        setResultTone('warning', 'UNTRUSTED');
+        resultIcon.textContent = '⚠️';
+        resultHeading.textContent = 'Signature Valid — Untrusted Signer';
+        resultMessage.textContent =
+          'The payload is internally consistent with the public key embedded in .qsig, but no external trusted key was supplied.';
+        showToast('warning', 'Signature is valid only with its embedded, untrusted key');
+        return;
+      }
       setResultTone('valid', 'VALID');
       resultIcon.textContent = '✅';
       resultHeading.textContent = 'Signature Valid';
@@ -554,6 +612,11 @@ export function setupVerifyTab(state, workerClient) {
     const input = getCurrentInput();
     const sigFile = sigInput.files?.[0] ?? null;
 
+    if (state.keys.transitioning) {
+      showToast('warning', 'Wait for the active key update to complete');
+      return;
+    }
+
     if (input.mode === 'file' && !input.file) {
       showToast('warning', 'Select a file to verify');
       return;
@@ -578,15 +641,35 @@ export function setupVerifyTab(state, workerClient) {
       showToast('error', signaturePreview.error || 'Cannot verify because .qsig review failed');
       return;
     }
+    if (verifyGate.busy) return;
+
+    const operationToken = verifyGate.begin();
+    const reviewSnapshot = {
+      inputHashHex: inputPreview.hashHex,
+      inputLength: inputPreview.inputLength,
+      suiteId: signaturePreview.suiteId,
+      signatureProfileId: signaturePreview.signatureProfileId,
+      hashAlgId: signaturePreview.hashAlgId,
+      authDigestAlgId: signaturePreview.authDigestAlgId,
+      context: signaturePreview.context,
+      signatureLength: signaturePreview.signatureLength,
+      signedHashHex: signaturePreview.payloadDigestHex,
+      embeddedFingerprintHex: signaturePreview.embeddedFingerprintHex,
+      loadedKeyFingerprintHex: state.keys.public?.fingerprintHex ?? null,
+    };
+    let sigBytes = null;
+    let publicKeyFile = null;
 
     hideResultCard();
-    verifyBtn.disabled = true;
+    updateVerifyButtonState();
     resetProgress(progressEl, progressLabelEl);
     showToast('info', 'Verifying...');
 
     try {
-      const sigBytes = await readFileAsBytes(sigFile, { maxBytes: MAX_SIGNATURE_FILE_BYTES, field: 'sigFile' });
-      const publicKeyFile = state.keys.public?.fileBytes || null;
+      sigBytes = await readFileAsBytes(sigFile, { maxBytes: MAX_SIGNATURE_FILE_BYTES, field: 'sigFile' });
+      publicKeyFile = state.keys.public?.fileBytes ? Uint8Array.from(state.keys.public.fileBytes) : null;
+
+      if (!verifyGate.isCurrent(operationToken)) return;
 
       const result =
         input.mode === 'text'
@@ -604,10 +687,33 @@ export function setupVerifyTab(state, workerClient) {
               }
             );
 
+      if (!verifyGate.isCurrent(operationToken)) return;
+      const resultInputHashHex = result.computedHashHex || result.providedHashHex || null;
+      const resultLoadedKeyFingerprintHex =
+        result.loadedKeyFingerprintHex || (result.keySource === 'keys' ? result.signerFingerprintHex : null);
+      const verificationKeyWasEvaluated = resultInputHashHex === result.signedHashHex;
+      if (
+        resultInputHashHex !== reviewSnapshot.inputHashHex ||
+        result.inputLength !== reviewSnapshot.inputLength ||
+        result.signedHashHex !== reviewSnapshot.signedHashHex ||
+        result.suiteId !== reviewSnapshot.suiteId ||
+        result.signatureProfileId !== reviewSnapshot.signatureProfileId ||
+        result.hashAlgId !== reviewSnapshot.hashAlgId ||
+        result.authDigestAlgId !== reviewSnapshot.authDigestAlgId ||
+        result.context !== reviewSnapshot.context ||
+        result.signatureLength !== reviewSnapshot.signatureLength ||
+        result.signatureMetadataFingerprintHex !== reviewSnapshot.embeddedFingerprintHex ||
+        (verificationKeyWasEvaluated && resultLoadedKeyFingerprintHex !== reviewSnapshot.loadedKeyFingerprintHex)
+      ) {
+        throw new Error('Verification result does not match the reviewed inputs; result was discarded.');
+      }
       renderResultCard(result);
     } catch (err) {
-      showToast('error', workerFriendlyError(err));
+      if (verifyGate.isCurrent(operationToken)) showToast('error', workerFriendlyError(err));
     } finally {
+      if (sigBytes) wipeBytes(sigBytes);
+      if (publicKeyFile) wipeBytes(publicKeyFile);
+      verifyGate.finish(operationToken);
       updateVerifyButtonState();
       resetProgress(progressEl, progressLabelEl);
     }
@@ -653,6 +759,7 @@ export function setupVerifyTab(state, workerClient) {
   });
 
   window.addEventListener('keys:updated', () => {
+    invalidateVerifyOperation();
     hideResultCard();
     if (signaturePreview.status === 'ready') {
       setSignaturePreview({

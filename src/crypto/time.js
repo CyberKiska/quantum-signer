@@ -4,16 +4,15 @@ export function normalizeCanonicalUtcIso8601(value) {
   if (typeof value !== 'string') {
     throw new TypeError('createdAt must be string');
   }
-  const trimmed = value.trim();
-  if (!CANONICAL_UTC_ISO8601_RE.test(trimmed)) {
+  if (!CANONICAL_UTC_ISO8601_RE.test(value)) {
     throw new RangeError('invalid_iso8601');
   }
-  const ts = Date.parse(trimmed);
+  const ts = Date.parse(value);
   if (!Number.isFinite(ts)) {
     throw new RangeError('invalid_iso8601');
   }
   const normalized = new Date(ts).toISOString();
-  if (normalized !== trimmed) {
+  if (normalized !== value) {
     throw new RangeError('invalid_iso8601');
   }
   return normalized;

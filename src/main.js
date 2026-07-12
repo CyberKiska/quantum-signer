@@ -28,6 +28,7 @@ const state = {
   keys: {
     public: null,
     secret: null,
+    transitioning: false,
   },
   sign: {
     lastSignature: null,
@@ -41,7 +42,17 @@ function wipeStateBytes(appState) {
   if (appState.sign.lastSignature?.bytes) wipeBytes(appState.sign.lastSignature.bytes);
 }
 
+function enforceTopLevelBrowsingContext() {
+  if (window.top === window.self) return;
+  document.body.replaceChildren();
+  const message = document.createElement('p');
+  message.textContent = 'Quantum Signer refuses to run inside an embedded frame. Open it directly.';
+  document.body.append(message);
+  throw new Error('Embedded execution is not allowed');
+}
+
 async function main() {
+  enforceTopLevelBrowsingContext();
   const basePath = getBasePath();
   const workerUrl = `${basePath}assets/worker.js`;
   const workerClient = createWorkerClient(workerUrl);

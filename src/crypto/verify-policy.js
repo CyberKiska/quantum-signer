@@ -96,6 +96,7 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     return {
       valid: false,
       cryptoValid: false,
+      trusted: false,
       code: ErrorCode.E_INPUT_REQUIRED,
       verifiedKeySource: 'none',
       trustSource: 'none',
@@ -122,6 +123,7 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     return {
       valid: loadedResult.valid,
       cryptoValid,
+      trusted: loadedResult.valid,
       code: loadedResult.valid ? null : ErrorCode.E_SIGNATURE_INVALID,
       ...hashDetails,
       suiteId: parsedSig.suiteId,
@@ -151,6 +153,7 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     return {
       valid: false,
       cryptoValid: false,
+      trusted: false,
       code: ErrorCode.E_SIGNATURE_INVALID,
       ...hashDetails,
       suiteId: parsedSig.suiteId,
@@ -170,6 +173,7 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
   return {
     valid: true,
     cryptoValid: true,
+    trusted: result.keySource !== 'signature',
     code: null,
     ...hashDetails,
     suiteId: parsedSig.suiteId,

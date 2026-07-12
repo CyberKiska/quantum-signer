@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
+    "check:repro": "node scripts/repro-check.mjs",
     "selftest": "node scripts/selftest.mjs",
     "check": "npm run selftest && npm run build"
   },

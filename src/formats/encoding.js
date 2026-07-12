@@ -1,6 +1,6 @@
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
+import { utf8ToBytesStrict } from '../crypto/text-encoding.js';
 
-const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
 function ensureBytes(value, field = 'bytes') {
@@ -16,7 +16,7 @@ function ensureString(value, field = 'value') {
 }
 
 export function utf8ToBytes(value) {
-  return encoder.encode(String(value));
+  return utf8ToBytesStrict(value, 'text');
 }
 
 export function bytesToUtf8(bytes) {
@@ -50,11 +50,18 @@ export function bytesToBase64(bytes) {
 export function base64ToBytes(value) {
   ensureString(value, 'base64');
   const normalized = value.trim();
+  if (
+    normalized.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(normalized)
+  ) {
+    throw new TypeError('invalid or non-canonical base64 string');
+  }
   const binary = atob(normalized);
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) {
     out[i] = binary.charCodeAt(i);
   }
+  if (bytesToBase64(out) !== normalized) throw new TypeError('non-canonical base64 pad bits');
   return out;
 }
 
@@ -64,12 +71,20 @@ export function bytesToBase64Url(bytes) {
 
 export function base64UrlToBytes(value) {
   ensureString(value, 'base64url');
-  let normalized = value.trim().replace(/-/g, '+').replace(/_/g, '/');
+  const input = value.trim();
+  if (!/^[A-Za-z0-9_-]*$/.test(input) || input.length % 4 === 1) {
+    throw new TypeError('invalid or non-canonical base64url string');
+  }
+  let normalized = input.replace(/-/g, '+').replace(/_/g, '/');
   const padding = normalized.length % 4;
   if (padding === 2) normalized += '==';
   else if (padding === 3) normalized += '=';
   else if (padding !== 0) {
     throw new TypeError('invalid base64url string');
   }
-  return base64ToBytes(normalized);
+  const binary = atob(normalized);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  if (bytesToBase64Url(out) !== input) throw new TypeError('non-canonical base64url pad bits');
+  return out;
 }

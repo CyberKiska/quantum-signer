@@ -15,7 +15,7 @@ function normalizeBasePath(value) {
   return out;
 }
 
-export async function buildProject({ minify = true } = {}) {
+export async function buildProject({ minify = true, sourcemap = !minify } = {}) {
   const distDir = path.join(root, 'dist');
   const assetsDir = path.join(distDir, 'assets');
   const srcDir = path.join(root, 'src');
@@ -34,7 +34,7 @@ export async function buildProject({ minify = true } = {}) {
     format: 'esm',
     platform: 'browser',
     target: ['es2022'],
-    sourcemap: true,
+    sourcemap,
     minify,
     logLevel: 'info',
   });

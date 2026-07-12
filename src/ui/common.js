@@ -37,6 +37,18 @@ export function safeFileName(name, fallback = 'download.bin') {
   return trimmed.replace(/[^a-zA-Z0-9._-]+/g, '_');
 }
 
+const UNSAFE_REVIEW_CODE_POINT = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/gu;
+
+export function safeReviewText(value, maxCodePoints = 512) {
+  const text = String(value ?? '').replace(UNSAFE_REVIEW_CODE_POINT, (char) => {
+    const hex = char.codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
+    return `<U+${hex}>`;
+  });
+  const codePoints = Array.from(text);
+  if (codePoints.length <= maxCodePoints) return text;
+  return `${codePoints.slice(0, maxCodePoints).join('')}…`;
+}
+
 export function downloadBytes(filename, bytes, mime = 'application/octet-stream') {
   const blob = new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -87,7 +99,9 @@ export function createWorkerClient(workerUrl) {
   const worker = new Worker(workerUrl, { type: 'module' });
   let seq = 0;
   const pending = new Map();
+  const abandoned = new Map();
   const defaultTimeoutMs = 60_000;
+  const abandonedRetentionMs = 15 * 60_000;
 
   function clearPendingTimer(entry) {
     if (entry?.timer) clearTimeout(entry.timer);
@@ -96,7 +110,22 @@ export function createWorkerClient(workerUrl) {
   worker.onmessage = (event) => {
     const msg = event.data || {};
     const p = pending.get(msg.id);
-    if (!p) return;
+    if (!p) {
+      const abandonedEntry = abandoned.get(msg.id);
+      if (abandonedEntry && msg.type !== 'PROGRESS') {
+        clearTimeout(abandonedEntry.timer);
+        abandoned.delete(msg.id);
+        const handle = msg.type === 'RESULT' ? msg.result?.sessionHandle : null;
+        if (typeof handle === 'string' && handle.length > 0) {
+          worker.postMessage({
+            id: `late-cleanup-${Date.now()}-${seq++}`,
+            type: 'CLEAR_SECRET_SESSION',
+            payload: { secretSessionHandle: handle },
+          });
+        }
+      }
+      return;
+    }
 
     if (msg.type === 'PROGRESS') {
       if (typeof p.onProgress === 'function') p.onProgress(msg);
@@ -119,6 +148,17 @@ export function createWorkerClient(workerUrl) {
     }
   };
 
+  function rejectAllPending(message) {
+    for (const entry of pending.values()) {
+      clearPendingTimer(entry);
+      entry.reject(new Error(message));
+    }
+    pending.clear();
+  }
+
+  worker.onerror = () => rejectAllPending('Cryptographic worker failed');
+  worker.onmessageerror = () => rejectAllPending('Cryptographic worker returned an unreadable message');
+
   function call(type, payload, options = {}) {
     const id = `${Date.now()}-${seq++}`;
     const timeoutMs = options.timeoutMs || defaultTimeoutMs;
@@ -128,6 +168,8 @@ export function createWorkerClient(workerUrl) {
         const p = pending.get(id);
         if (p) {
           pending.delete(id);
+          const abandonedTimer = setTimeout(() => abandoned.delete(id), abandonedRetentionMs);
+          abandoned.set(id, { type, timer: abandonedTimer });
           reject(new Error(`Operation timed out after ${timeoutMs}ms`));
         }
       }, timeoutMs);
@@ -144,6 +186,9 @@ export function createWorkerClient(workerUrl) {
   }
 
   function destroy() {
+    rejectAllPending('Cryptographic worker was terminated');
+    for (const entry of abandoned.values()) clearTimeout(entry.timer);
+    abandoned.clear();
     worker.terminate();
   }
 

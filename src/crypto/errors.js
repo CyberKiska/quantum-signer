@@ -1,6 +1,7 @@
 export const ErrorCode = Object.freeze({
   E_INPUT_REQUIRED: 'E_INPUT_REQUIRED',
   E_INPUT_TOO_LARGE: 'E_INPUT_TOO_LARGE',
+  E_TEXT_ENCODING: 'E_TEXT_ENCODING',
   E_HASH_HEX_INVALID: 'E_HASH_HEX_INVALID',
   E_FORMAT_MAGIC: 'E_FORMAT_MAGIC',
   E_FORMAT_VERSION: 'E_FORMAT_VERSION',
@@ -13,6 +14,7 @@ export const ErrorCode = Object.freeze({
   E_KEY_SUITE_MISMATCH: 'E_KEY_SUITE_MISMATCH',
   E_SESSION_MISSING: 'E_SESSION_MISSING',
   E_EXPORT_AUTH: 'E_EXPORT_AUTH',
+  E_SIGN_SELF_VERIFY: 'E_SIGN_SELF_VERIFY',
   E_SIGNATURE_INVALID: 'E_SIGNATURE_INVALID',
   E_FILE_HASH_MISMATCH: 'E_FILE_HASH_MISMATCH',
   E_WORKER_PROTOCOL: 'E_WORKER_PROTOCOL',
@@ -22,6 +24,7 @@ export const ErrorCode = Object.freeze({
 const MESSAGES = {
   [ErrorCode.E_INPUT_REQUIRED]: 'Required input is missing.',
   [ErrorCode.E_INPUT_TOO_LARGE]: 'Input exceeds the configured size limit.',
+  [ErrorCode.E_TEXT_ENCODING]: 'Text contains invalid Unicode and cannot be encoded canonically.',
   [ErrorCode.E_HASH_HEX_INVALID]: 'Invalid SHA3-512 hash format (expected 128 hex chars).',
   [ErrorCode.E_FORMAT_MAGIC]: 'Invalid file magic header.',
   [ErrorCode.E_FORMAT_VERSION]: 'Unsupported file format version.',
@@ -34,6 +37,7 @@ const MESSAGES = {
   [ErrorCode.E_KEY_SUITE_MISMATCH]: 'Key suite does not match signature suite.',
   [ErrorCode.E_SESSION_MISSING]: 'Secret session not found or already cleared.',
   [ErrorCode.E_EXPORT_AUTH]: 'Secret export authorization failed.',
+  [ErrorCode.E_SIGN_SELF_VERIFY]: 'Generated signature failed self-verification; output was discarded.',
   [ErrorCode.E_SIGNATURE_INVALID]: 'Signature verification failed.',
   [ErrorCode.E_FILE_HASH_MISMATCH]: 'Provided file/hash does not match signed file hash.',
   [ErrorCode.E_WORKER_PROTOCOL]: 'Worker protocol error.',

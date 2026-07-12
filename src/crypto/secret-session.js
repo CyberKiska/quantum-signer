@@ -43,6 +43,13 @@ function buildSessionSummary(handle, session) {
 export function createSecretSessionManager() {
   const sessions = new Map();
 
+  function wipeSession(session) {
+    if (session.wiped) return;
+    session.wiped = true;
+    wipeBytes(session.secretKey);
+    wipeBytes(session.publicKey);
+  }
+
   function createSession({ suiteId, secretKey, publicKey }) {
     assertKeyLength(suiteId, secretKey, 'secret');
     const sessionSecretKey = cloneBytes(secretKey);
@@ -54,6 +61,9 @@ export function createSecretSessionManager() {
       suiteId,
       secretKey: sessionSecretKey,
       publicKey: sessionPublicKey,
+      activeLeases: 0,
+      clearRequested: false,
+      wiped: false,
       exportConsentToken: randomOpaqueId('export-consent'),
       fingerprintShort: computeFingerprint(sessionPublicKey, 8),
       fingerprintHex: computeFingerprintHex(sessionPublicKey),
@@ -77,10 +87,33 @@ export function createSecretSessionManager() {
   function clearSession(handle) {
     const session = sessions.get(handle);
     if (!session) return false;
-    wipeBytes(session.secretKey);
-    wipeBytes(session.publicKey);
     sessions.delete(handle);
+    session.clearRequested = true;
+    if (session.activeLeases === 0) wipeSession(session);
     return true;
+  }
+
+  function acquireSession(handle) {
+    const session = requireSession(handle);
+    if (session.clearRequested || session.wiped) {
+      throw createError(ErrorCode.E_SESSION_MISSING, { field: 'secretSessionHandle', handle });
+    }
+
+    session.activeLeases += 1;
+    let released = false;
+    return {
+      session,
+      release() {
+        if (released) return;
+        released = true;
+        session.activeLeases -= 1;
+        if (session.activeLeases < 0) {
+          session.activeLeases = 0;
+          throw createError(ErrorCode.E_INTERNAL, { reason: 'negative_session_lease_count' });
+        }
+        if (session.clearRequested && session.activeLeases === 0) wipeSession(session);
+      },
+    };
   }
 
   return {
@@ -128,6 +161,8 @@ export function createSecretSessionManager() {
     getSession(handle) {
       return requireSession(handle);
     },
+
+    acquireSession,
 
     hasSession(handle) {
       return sessions.has(handle);
