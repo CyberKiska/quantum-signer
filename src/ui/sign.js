@@ -7,6 +7,7 @@ import {
   downloadBytes,
   formatBytes,
   resetProgress,
+  renderReviewGroups,
   setProgress,
   safeReviewText,
   showToast,
@@ -132,28 +133,43 @@ export function setupSignTab(state, workerClient) {
 
   function renderReview() {
     const { mode, file, text } = getCurrentInput();
-    const lines = [];
-
-    lines.push(describeInput(mode, file, text, previewState.inputLength));
-    lines.push(`Context: ${safeReviewText(QSIG_DEFAULT_CTX)}`);
-
-    if (state.keys.secret) {
-      lines.push(
-        `Active signer: ${getSuiteName(state.keys.secret.suiteId)} / ${state.keys.secret.fingerprintHex}`
-      );
-    } else {
-      lines.push('Active signer: load a secret key in Keys tab');
-    }
+    let payloadDigest = 'Waiting for review input';
 
     if (previewState.status === 'ready') {
-      lines.push(`Payload digest (${getHashName(HashAlgId.SHA3_512)}): ${previewState.hashHex}`);
+      payloadDigest = previewState.hashHex;
     } else if (previewState.status === 'loading') {
-      lines.push('Payload digest (SHA3-512): computing...');
+      payloadDigest = 'Computing...';
     } else if (previewState.status === 'error') {
-      lines.push(`Payload digest (SHA3-512): unavailable (${previewState.error})`);
-    } else {
-      lines.push('Payload digest (SHA3-512): waiting for review input');
+      payloadDigest = `Unavailable (${previewState.error})`;
     }
+
+    renderReviewGroups(reviewEl, [
+      {
+        title: 'Reviewed input',
+        rows: [
+          { label: 'Input', value: describeInput(mode, file, text, previewState.inputLength) },
+          {
+            label: `Payload digest (${getHashName(HashAlgId.SHA3_512)})`,
+            value: payloadDigest,
+          },
+        ],
+      },
+      {
+        title: 'Signature parameters',
+        rows: [{ label: 'Context', value: QSIG_DEFAULT_CTX }],
+      },
+      {
+        title: 'Active signing key',
+        rows: [
+          state.keys.secret
+            ? {
+                label: 'Signer',
+                value: `${getSuiteName(state.keys.secret.suiteId)} / ${state.keys.secret.fingerprintHex}`,
+              }
+            : { label: 'Signer', value: 'Load a secret key in Keys tab' },
+        ],
+      },
+    ]);
 
     if (previewState.status === 'error') {
       setBadge(reviewBadgeEl, 'invalid', 'ERROR');
@@ -169,7 +185,6 @@ export function setupSignTab(state, workerClient) {
       setBadge(reviewBadgeEl, 'neutral', 'WAITING');
     }
 
-    reviewEl.textContent = lines.join('\n');
     updateExecuteState();
   }
 

@@ -5,9 +5,11 @@ import { HashAlgId, getHashName, getSuiteName, unpackSignatureV2 } from '../form
 import { createOperationGate } from '../core/operation-gate.js';
 import {
   byId,
+  buildLegacyDisplayMetadataReviewGroup,
   formatBytes,
   readFileAsBytes,
   resetProgress,
+  renderReviewGroups,
   setProgress,
   safeReviewText,
   showToast,
@@ -263,68 +265,118 @@ export function setupVerifyTab(state, workerClient) {
   function renderReview() {
     const { mode, file, text } = getCurrentInput();
     const sigFile = sigInput.files?.[0] ?? null;
-    const lines = [];
-
-    lines.push(describeVerifyInput(mode, file, text, inputPreview.inputLength));
+    let inputDigest = 'Waiting for review input';
     if (inputPreview.status === 'ready') {
-      lines.push(`Computed payload digest (${getHashName(HashAlgId.SHA3_512)}): ${inputPreview.hashHex}`);
+      inputDigest = inputPreview.hashHex;
     } else if (inputPreview.status === 'loading') {
-      lines.push('Computed payload digest (SHA3-512): computing...');
+      inputDigest = 'Computing...';
     } else if (inputPreview.status === 'error') {
-      lines.push(`Computed payload digest (SHA3-512): unavailable (${inputPreview.error})`);
-    } else {
-      lines.push('Computed payload digest (SHA3-512): waiting for review input');
+      inputDigest = `Unavailable (${inputPreview.error})`;
     }
 
-    if (!sigFile) {
-      lines.push('Signature file: waiting for .qsig selection');
-    } else {
-      lines.push(`Signature file: ${safeReviewText(sigFile.name)} (${formatBytes(sigFile.size)})`);
-    }
+    const reviewedInputGroup = {
+      title: 'Reviewed local inputs',
+      rows: [
+        {
+          label: 'Original input',
+          value: describeVerifyInput(mode, file, text, inputPreview.inputLength),
+        },
+        {
+          label: `Computed payload digest (${getHashName(HashAlgId.SHA3_512)})`,
+          value: inputDigest,
+        },
+        {
+          label: 'Signature file',
+          value: sigFile ? `${sigFile.name} (${formatBytes(sigFile.size)})` : 'Waiting for .qsig selection',
+        },
+      ],
+    };
 
+    let containerGroup;
     if (signaturePreview.status === 'ready') {
-      lines.push(`Declared algorithm: ${getSuiteName(signaturePreview.suiteId)}`);
-      lines.push(`Declared payload digest: ${signaturePreview.hashAlgName}`);
-      lines.push(`Context: ${safeReviewText(signaturePreview.context)}`);
-      lines.push(`Embedded signer fingerprint (SHA3-256): ${signaturePreview.embeddedFingerprintHex}`);
-      if (signaturePreview.displayFilename) {
-        lines.push(`Unauthenticated display filename: ${safeReviewText(signaturePreview.displayFilename)}`);
-      }
-      if (signaturePreview.displayFilesize !== null) {
-        lines.push(`Unauthenticated display filesize: ${signaturePreview.displayFilesize} bytes`);
-        if (
-          inputPreview.status === 'ready' &&
-          String(inputPreview.inputLength) !== signaturePreview.displayFilesize
-        ) {
-          lines.push('Warning: unauthenticated display filesize does not match the reviewed input.');
-        }
-      }
-      if (signaturePreview.displayCreatedAt) {
-        lines.push(`Unauthenticated display createdAt: ${safeReviewText(signaturePreview.displayCreatedAt)}`);
-      }
+      containerGroup = {
+        title: 'Container fields — authenticated only after verification',
+        note: 'Treat these declarations as unverified until the signature result succeeds.',
+        rows: [
+          { label: 'Declared algorithm', value: getSuiteName(signaturePreview.suiteId) },
+          { label: 'Declared digest algorithm', value: signaturePreview.hashAlgName },
+          { label: 'Declared payload digest', value: signaturePreview.payloadDigestHex },
+          { label: 'Context', value: signaturePreview.context },
+          {
+            label: 'Embedded signer fingerprint (SHA3-256)',
+            value: signaturePreview.embeddedFingerprintHex,
+          },
+        ],
+      };
     } else if (signaturePreview.status === 'loading') {
-      lines.push('Signature metadata: parsing .qsig...');
+      containerGroup = {
+        title: 'Container status',
+        rows: [{ label: 'Signature metadata', value: 'Parsing .qsig...' }],
+      };
     } else if (signaturePreview.status === 'error') {
-      lines.push(`Signature metadata: unavailable (${signaturePreview.error})`);
+      containerGroup = {
+        title: 'Container status',
+        tone: 'invalid',
+        rows: [{ label: 'Signature metadata', value: `Unavailable (${signaturePreview.error})` }],
+      };
     } else {
-      lines.push('Signature metadata: waiting for .qsig selection');
+      containerGroup = {
+        title: 'Container status',
+        rows: [{ label: 'Signature metadata', value: 'Waiting for .qsig selection' }],
+      };
     }
 
-    if (state.keys.public) {
-      lines.push(`Loaded public key (SHA3-256): ${state.keys.public.fingerprintHex}`);
-    } else {
-      lines.push('Loaded public key: none loaded');
-    }
-
+    const trustRows = [
+      {
+        label: 'Loaded public key (SHA3-256)',
+        value: state.keys.public?.fingerprintHex || 'None loaded',
+      },
+    ];
     if (signaturePreview.status === 'ready') {
       if (signaturePreview.loadedKeyMatches === true) {
-        lines.push('Key relationship: loaded public key matches embedded signer key');
+        trustRows.push({
+          label: 'Key relationship',
+          value: 'Loaded public key matches embedded signer key',
+        });
       } else if (signaturePreview.loadedKeyMatches === false) {
-        lines.push('Key relationship: warning, loaded public key differs from embedded signer key');
+        trustRows.push({
+          label: 'Key relationship',
+          value: 'Warning: loaded public key differs from embedded signer key',
+          tone: 'warning',
+        });
       } else {
-        lines.push('Key relationship: verification can use embedded signer key if no public key is loaded');
+        trustRows.push({
+          label: 'Key relationship',
+          value: 'No external key selected; verification can use the embedded key without identity assurance',
+        });
       }
     }
+
+    const legacyDisplayGroup =
+      signaturePreview.status === 'ready'
+        ? buildLegacyDisplayMetadataReviewGroup(
+            {
+              filename: signaturePreview.displayFilename,
+              filesize: signaturePreview.displayFilesize,
+              createdAt: signaturePreview.displayCreatedAt,
+            },
+            inputPreview.status === 'ready' ? inputPreview.inputLength : null
+          )
+        : null;
+
+    renderReviewGroups(
+      reviewEl,
+      [
+        reviewedInputGroup,
+        containerGroup,
+        legacyDisplayGroup,
+        {
+          title: 'External trust input',
+          note: 'A matching key loaded independently is required for signer identity assurance.',
+          rows: trustRows,
+        },
+      ].filter(Boolean)
+    );
 
     if (inputPreview.status === 'error' || signaturePreview.status === 'error') {
       setBadge(reviewBadgeEl, 'invalid', 'ERROR');
@@ -338,7 +390,6 @@ export function setupVerifyTab(state, workerClient) {
       setBadge(reviewBadgeEl, 'neutral', 'WAITING');
     }
 
-    reviewEl.textContent = lines.join('\n');
     updateVerifyButtonState();
   }
 

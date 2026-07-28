@@ -45,7 +45,7 @@ import {
   unpackSecretKey,
   unpackSignatureV2,
 } from '../formats/containers.js';
-import { wipeBytes } from './bytes.js';
+import { equalsBytes, wipeBytes } from './bytes.js';
 import { utf8ToBytesStrict } from './text-encoding.js';
 import { base64ToBytes, base64UrlToBytes } from '../formats/encoding.js';
 import { createOperationGate } from '../core/operation-gate.js';
@@ -219,6 +219,54 @@ function buildCases(suites) {
       const expected =
         'a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26';
       if (actual !== expected) throw new Error(`SHA3-512 KAT mismatch: ${actual}`);
+    },
+  });
+
+  cases.push({
+    name: 'legacy unsigned display metadata remains compatible and outside the signature TBS',
+    fn: async () => {
+      const suiteId = SuiteId.ML_DSA_44;
+      const keys = generateKeypair(suiteId);
+      const publicKeyFile = packPublicKey({ suiteId, keyBytes: keys.publicKey });
+      const payload = textBytes('legacy-display-metadata-compatibility');
+      const { sigFile } = buildSignatureContainer({
+        suiteId,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+      const parsed = unpackSignatureV2(sigFile);
+      const alteredFilename = 'legacy.pdf\u2028Valid: YES';
+      const repacked = packSignatureV2({
+        suiteId: parsed.suiteId,
+        signatureProfileId: parsed.signatureProfileId,
+        payloadDigestAlgId: parsed.payloadDigestAlgId,
+        authDigestAlgId: parsed.authDigestAlgId,
+        payloadDigest: parsed.payloadDigest,
+        authMetaDigest: parsed.authMetaDigest,
+        signature: parsed.signature,
+        ctx: parsed.ctx,
+        authenticatedMetadata: parsed.authenticatedMetadata,
+        displayMetadata: {
+          ...parsed.displayMetadata,
+          filename: alteredFilename,
+        },
+      });
+      const reparsed = unpackSignatureV2(repacked);
+      const result = finalizeVerification(reparsed, publicKeyFile, {
+        inputKind: 'text',
+        inputLength: payload.length,
+      });
+
+      if (!equalsBytes(parsed.tbs, reparsed.tbs)) {
+        throw new Error('legacy display metadata unexpectedly changed the signature TBS');
+      }
+      if (reparsed.displayMetadata.filename !== alteredFilename) {
+        throw new Error('legacy display metadata did not remain parse-compatible');
+      }
+      if (result.valid !== true || result.trusted !== true) {
+        throw new Error('legacy display metadata broke otherwise valid trusted verification');
+      }
     },
   });
 

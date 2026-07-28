@@ -37,7 +37,8 @@ export function safeFileName(name, fallback = 'download.bin') {
   return trimmed.replace(/[^a-zA-Z0-9._-]+/g, '_');
 }
 
-const UNSAFE_REVIEW_CODE_POINT = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/gu;
+const UNSAFE_REVIEW_CODE_POINT =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/gu;
 
 export function safeReviewText(value, maxCodePoints = 512) {
   const text = String(value ?? '').replace(UNSAFE_REVIEW_CODE_POINT, (char) => {
@@ -47,6 +48,88 @@ export function safeReviewText(value, maxCodePoints = 512) {
   const codePoints = Array.from(text);
   if (codePoints.length <= maxCodePoints) return text;
   return `${codePoints.slice(0, maxCodePoints).join('')}…`;
+}
+
+export function buildLegacyDisplayMetadataReviewGroup(
+  { filename = null, filesize = null, createdAt = null } = {},
+  reviewedInputLength = null
+) {
+  const rows = [];
+
+  if (filename !== null && filename !== '') {
+    rows.push({ label: 'Filename hint', value: filename });
+  }
+  if (filesize !== null) {
+    const value = String(filesize);
+    rows.push({ label: 'File size hint', value: `${value} bytes` });
+    if (Number.isInteger(reviewedInputLength) && String(reviewedInputLength) !== value) {
+      rows.push({
+        label: 'Mismatch warning',
+        value: 'The unsigned file size hint does not match the reviewed input.',
+        tone: 'warning',
+      });
+    }
+  }
+  if (createdAt !== null && createdAt !== '') {
+    rows.push({ label: 'Creation-time hint', value: createdAt });
+  }
+
+  if (rows.length === 0) return null;
+  return {
+    title: 'Legacy unsigned hints — not covered by the signature',
+    tone: 'untrusted',
+    note: 'For compatibility only. Never use these values to identify the signed input or signer.',
+    rows,
+  };
+}
+
+export function renderReviewGroups(container, groups) {
+  if (!container || typeof container.replaceChildren !== 'function') {
+    throw new TypeError('Review container must support replaceChildren().');
+  }
+  const doc = container.ownerDocument;
+  if (!doc || typeof doc.createElement !== 'function' || typeof doc.createDocumentFragment !== 'function') {
+    throw new TypeError('Review container must belong to a document.');
+  }
+
+  const fragment = doc.createDocumentFragment();
+  for (const group of groups) {
+    if (!group || !Array.isArray(group.rows) || group.rows.length === 0) continue;
+
+    const section = doc.createElement('section');
+    section.className = `review-group${group.tone ? ` ${group.tone}` : ''}`;
+
+    const heading = doc.createElement('h4');
+    heading.className = 'review-group-title';
+    heading.textContent = safeReviewText(group.title, 160);
+    section.append(heading);
+
+    if (group.note) {
+      const note = doc.createElement('p');
+      note.className = 'review-group-note';
+      note.textContent = safeReviewText(group.note, 512);
+      section.append(note);
+    }
+
+    const fields = doc.createElement('dl');
+    fields.className = 'review-fields';
+    for (const row of group.rows) {
+      const field = doc.createElement('div');
+      field.className = `review-field${row.tone ? ` ${row.tone}` : ''}`;
+
+      const label = doc.createElement('dt');
+      label.textContent = safeReviewText(row.label, 160);
+      const value = doc.createElement('dd');
+      value.textContent = safeReviewText(row.value, row.maxCodePoints ?? 2048);
+
+      field.append(label, value);
+      fields.append(field);
+    }
+    section.append(fields);
+    fragment.append(section);
+  }
+
+  container.replaceChildren(fragment);
 }
 
 export function downloadBytes(filename, bytes, mime = 'application/octet-stream') {

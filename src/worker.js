@@ -37,6 +37,7 @@ import { equalsBytes, wipeBytes } from './crypto/bytes.js';
 import { createSecretSessionManager } from './crypto/secret-session.js';
 import { utf8ToBytesStrict } from './crypto/text-encoding.js';
 import { finalizePayloadVerification } from './crypto/verify-policy.js';
+import { resolveSignInputKind } from './core/sign-input.js';
 
 export const WorkerMessageType = Object.freeze({
   HASH_FILE: 'HASH_FILE',
@@ -218,6 +219,7 @@ async function handleClearSecretSession(_id, payload) {
 
 async function handleSign(id, payload) {
   validateRequired(payload.secretSessionHandle, 'secretSessionHandle');
+  const requestedInputKind = resolveSignInputKind(payload);
 
   let fileHash;
   let authMetaBytes = null;
@@ -229,7 +231,7 @@ async function handleSign(id, payload) {
   let signature = null;
 
   try {
-    if (payload.file) {
+    if (requestedInputKind === 'file') {
       assertFileSizeLimit(payload.file, MAX_PAYLOAD_FILE_BYTES, 'file');
       inputKind = 'file';
       inputLength = Number(payload.file.size || 0);
@@ -237,7 +239,7 @@ async function handleSign(id, payload) {
         chunkSize: payload.chunkSize,
         onProgress: (loaded, total) => sendProgress(id, WorkerMessageType.SIGN, loaded, total),
       });
-    } else if (typeof payload.text === 'string') {
+    } else {
       inputKind = 'text';
       const textBytes = encodeUserText(payload.text);
       try {
@@ -247,8 +249,6 @@ async function handleSign(id, payload) {
       } finally {
         wipeBytes(textBytes);
       }
-    } else {
-      throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'file|text' });
     }
 
     // Acquire key material only after all asynchronous hashing has completed.

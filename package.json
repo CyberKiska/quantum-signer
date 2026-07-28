@@ -9,9 +9,10 @@
     "build": "node scripts/build.mjs",
     "check:repro": "node scripts/repro-check.mjs",
     "test:headers": "node scripts/security-headers-test.mjs",
+    "test:p0-security": "node scripts/p0-security-test.mjs",
     "test:session": "node scripts/secret-session-test.mjs",
     "test:worker": "node scripts/worker-client-test.mjs",
-    "selftest": "npm run test:headers && npm run test:session && npm run test:worker && node scripts/selftest.mjs",
+    "selftest": "npm run test:headers && npm run test:p0-security && npm run test:session && npm run test:worker && node scripts/selftest.mjs",
     "check": "npm run selftest && npm run build"
   },
   "dependencies": {

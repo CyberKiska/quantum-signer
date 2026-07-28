@@ -1,0 +1,66 @@
+name: Continuous integration
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick-validation:
+    name: Quick validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Quick tests and production build
+        run: npm run check
+
+      - name: Reproducible build check
+        run: npm run check:repro
+
+      - name: High-severity dependency advisory gate
+        run: npm audit --audit-level=high
+
+      - name: Confirm checks did not modify tracked sources
+        run: git diff --exit-code
+
+  full-cryptographic-validation:
+    name: Full cryptographic validation
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    needs: quick-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Full cryptographic self-test
+        env:
+          FULL_SELFTEST: '1'
+        run: npm run selftest
