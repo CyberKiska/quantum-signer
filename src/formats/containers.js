@@ -23,12 +23,14 @@ export const QSIG_FORMAT_VERSION_MAJOR = 2;
 export const QSIG_FORMAT_VERSION_MINOR = 0;
 export const QSIG_TBS_VERSION_MAJOR = 2;
 export const QSIG_TBS_VERSION_MINOR = 0;
+export const QSIG_V2_CONTEXT = 'quantum-signer/v2';
 
 export const MAGIC_SIG = utf8ToBytes('PQSG');
 export const MAGIC_PQPK = utf8ToBytes('PQPK');
 export const MAGIC_PQSK = utf8ToBytes('PQSK');
 export const MAGIC_TBS = utf8ToBytes('QSTB');
 export const MAGIC_QSCX = utf8ToBytes('QSCX');
+const QSIG_V2_CONTEXT_BYTES = utf8ToBytes(QSIG_V2_CONTEXT);
 
 export { SuiteId };
 
@@ -97,6 +99,17 @@ export const MetadataTag = Object.freeze({
   SIGNER_FINGERPRINT: 0x11,
 });
 
+const AUTH_METADATA_TAGS = new Set([
+  MetadataTag.SIGNER_PUBLIC_KEY,
+  MetadataTag.SIGNER_FINGERPRINT,
+]);
+const DISPLAY_METADATA_TAGS = new Set([
+  MetadataTag.FILENAME,
+  MetadataTag.FILESIZE,
+  MetadataTag.CREATED_AT,
+]);
+const KNOWN_METADATA_TAGS = new Set(Object.values(MetadataTag));
+
 const KNOWN_SIG_FLAGS =
   SigFlags.CTX_PRESENT |
   SigFlags.FILENAME_PRESENT |
@@ -151,7 +164,16 @@ function ensureU32(value, field) {
 }
 
 function ensureU64(value, field) {
-  if (typeof value === 'number') value = BigInt(value);
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) {
+      throw createError(ErrorCode.E_FORMAT_LENGTH, {
+        field,
+        reason: 'unsafe_integer',
+        value: String(value),
+      });
+    }
+    value = BigInt(value);
+  }
   if (typeof value !== 'bigint' || value < 0n || value > U64_MAX) {
     throw createError(ErrorCode.E_FORMAT_LENGTH, { field, value: String(value) });
   }
@@ -175,8 +197,11 @@ function readU64LE(view, offset) {
 class Reader {
   constructor(bytes) {
     ensureUint8Array(bytes);
-    this.bytes = bytes;
-    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    // Snapshot the complete input once. Besides keeping parsed fields detached
+    // from caller memory, this prevents numeric header reads from racing a
+    // concurrently modified SharedArrayBuffer-backed view.
+    this.bytes = Uint8Array.from(bytes);
+    this.view = new DataView(this.bytes.buffer, this.bytes.byteOffset, this.bytes.byteLength);
     this.offset = 0;
   }
 
@@ -191,7 +216,7 @@ class Reader {
     if (this.offset + len > this.bytes.length) {
       throw createError(code, { needed: len, remaining: this.remaining() });
     }
-    const out = this.bytes.subarray(this.offset, this.offset + len);
+    const out = Uint8Array.from(this.bytes.subarray(this.offset, this.offset + len));
     this.offset += len;
     return out;
   }
@@ -436,6 +461,14 @@ function ensureOnlyAllowedTags(records, allowedTags, field) {
   }
 }
 
+function ensureKnownTagsInNamespace(records, allowedTags, field) {
+  for (const { tag } of records) {
+    if (KNOWN_METADATA_TAGS.has(tag) && !allowedTags.has(tag)) {
+      throw createError(ErrorCode.E_FORMAT_TLV, { field, reason: 'unexpected_tag', tag });
+    }
+  }
+}
+
 export function packAuthenticatedMetadataV2(metadata = {}) {
   const authMetadata = {
     signerPublicKey: metadata.signerPublicKey,
@@ -444,7 +477,7 @@ export function packAuthenticatedMetadataV2(metadata = {}) {
   const bytes = buildMetadataTLV(authMetadata);
   assertMaxLength(bytes.length, MAX_AUTH_METADATA_BYTES, 'authMetaLen', ErrorCode.E_FORMAT_LENGTH);
   const records = decodeTLVBlock(bytes);
-  ensureOnlyAllowedTags(records, new Set([MetadataTag.SIGNER_PUBLIC_KEY, MetadataTag.SIGNER_FINGERPRINT]), 'authMeta');
+  ensureOnlyAllowedTags(records, AUTH_METADATA_TAGS, 'authMeta');
   const parsed = parseMetadata(records);
   if (!(parsed.signerPublicKey instanceof Uint8Array) || !(parsed.signerFingerprint instanceof Uint8Array)) {
     throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMeta', reason: 'missing_signer_binding' });
@@ -461,7 +494,7 @@ export function packDisplayMetadataV2(metadata = {}) {
   const bytes = buildMetadataTLV(displayMetadata);
   assertMaxLength(bytes.length, MAX_DISPLAY_METADATA_BYTES, 'displayMetaLen', ErrorCode.E_FORMAT_LENGTH);
   const records = decodeTLVBlock(bytes);
-  ensureOnlyAllowedTags(records, new Set([MetadataTag.FILENAME, MetadataTag.FILESIZE, MetadataTag.CREATED_AT]), 'displayMeta');
+  ensureOnlyAllowedTags(records, DISPLAY_METADATA_TAGS, 'displayMeta');
   return bytes;
 }
 
@@ -477,6 +510,7 @@ function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDi
   ensureLength(expectedDigest, AUTH_META_DIGEST_LENGTH, ErrorCode.E_FORMAT_TLV, 'authMetaDigest');
 
   const records = decodeTLVBlock(authMetaBytes);
+  ensureKnownTagsInNamespace(records, AUTH_METADATA_TAGS, 'authMeta');
   const metadata = parseMetadata(records);
   if (!(metadata.signerPublicKey instanceof Uint8Array) || !(metadata.signerFingerprint instanceof Uint8Array)) {
     throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMeta', reason: 'missing_signer_binding' });
@@ -493,6 +527,7 @@ function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDi
 function parseDisplayMetadataV2(displayMetaBytes) {
   assertBytesLimit(displayMetaBytes, MAX_DISPLAY_METADATA_BYTES, 'displayMetaBytes', ErrorCode.E_FORMAT_LENGTH);
   const records = decodeTLVBlock(displayMetaBytes);
+  ensureKnownTagsInNamespace(records, DISPLAY_METADATA_TAGS, 'displayMeta');
   return parseMetadata(records);
 }
 
@@ -510,6 +545,9 @@ function parseMetadata(records) {
 
   for (const { tag, value } of records) {
     if (tag === MetadataTag.FILENAME) {
+      if (value.length === 0) {
+        throw createError(ErrorCode.E_FORMAT_TLV, { tag, reason: 'filename_empty' });
+      }
       metadata.filename = decodeUtf8(value);
       continue;
     }
@@ -646,7 +684,7 @@ export function packSignatureV2({
   payloadDigest,
   authMetaDigest,
   signature,
-  ctx = 'quantum-signer/v2',
+  ctx = QSIG_V2_CONTEXT,
   authenticatedMetadata = {},
   displayMetadata = {},
   versionMajor = QSIG_FORMAT_VERSION_MAJOR,
@@ -654,6 +692,20 @@ export function packSignatureV2({
 }) {
   ensureU8(versionMajor, 'versionMajor');
   ensureU8(versionMinor, 'versionMinor');
+  if (versionMajor !== QSIG_FORMAT_VERSION_MAJOR) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, {
+      field: 'versionMajor',
+      versionMajor,
+      expectedMajor: QSIG_FORMAT_VERSION_MAJOR,
+    });
+  }
+  if (versionMinor > QSIG_FORMAT_VERSION_MINOR) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, {
+      field: 'versionMinor',
+      versionMinor,
+      maxSupportedMinor: QSIG_FORMAT_VERSION_MINOR,
+    });
+  }
   ensureSuiteIdSupported(suiteId);
   ensureSignatureProfileIdSupported(signatureProfileId);
   ensureSignatureProfileCompatible(suiteId, signatureProfileId);
@@ -663,7 +715,14 @@ export function packSignatureV2({
   ensureLength(authMetaDigest, AUTH_META_DIGEST_LENGTH, ErrorCode.E_FORMAT_TLV, 'authMetaDigest');
   ensureUint8Array(signature, ErrorCode.E_FORMAT_LENGTH, 'signature');
 
-  const ctxBytes = ctx ? utf8ToBytes(ctx) : new Uint8Array();
+  if (ctx !== QSIG_V2_CONTEXT) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, {
+      field: 'ctx',
+      reason: 'unsupported_context',
+      expected: QSIG_V2_CONTEXT,
+    });
+  }
+  const ctxBytes = utf8ToBytes(ctx);
   assertMaxLength(ctxBytes.length, MAX_CONTEXT_BYTES, 'ctxLen', ErrorCode.E_FORMAT_LENGTH);
   ensureU8(ctxBytes.length, 'ctxLen');
   if (ctxBytes.length === 0) {
@@ -751,6 +810,13 @@ export function unpackSignatureV2(sigBytes) {
       expectedMajor: QSIG_FORMAT_VERSION_MAJOR,
     });
   }
+  if (versionMinor > QSIG_FORMAT_VERSION_MINOR) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, {
+      field: 'versionMinor',
+      versionMinor,
+      maxSupportedMinor: QSIG_FORMAT_VERSION_MINOR,
+    });
+  }
 
   const suiteId = reader.u8(ErrorCode.E_SUITE_UNSUPPORTED);
   const signatureProfileId = reader.u8(ErrorCode.E_FORMAT_VERSION);
@@ -794,6 +860,14 @@ export function unpackSignatureV2(sigBytes) {
   if (ctxBytes.length === 0) {
     throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'ctx', reason: 'required' });
   }
+  const ctx = decodeUtf8(ctxBytes);
+  if (!equalsBytes(ctxBytes, QSIG_V2_CONTEXT_BYTES)) {
+    throw createError(ErrorCode.E_FORMAT_FLAGS, {
+      field: 'ctx',
+      reason: 'unsupported_context',
+      expected: QSIG_V2_CONTEXT,
+    });
+  }
   const authMetaBytes = reader.take(authMetaLen, ErrorCode.E_FORMAT_TLV);
   const displayMetaBytes = reader.take(displayMetaLen, ErrorCode.E_FORMAT_TLV);
   const signature = reader.take(sigLen, ErrorCode.E_FORMAT_LENGTH);
@@ -823,7 +897,6 @@ export function unpackSignatureV2(sigBytes) {
     throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'createdAt', flags });
   }
 
-  const ctx = decodeUtf8(ctxBytes);
   const tbs = buildTBSV2({
     formatVerMajor: versionMajor,
     formatVerMinor: versionMinor,
@@ -861,6 +934,20 @@ export function unpackSignatureV2(sigBytes) {
 function buildKeyFile({ magic, suiteId, keyBytes, versionMajor, versionMinor }) {
   ensureU8(versionMajor, 'versionMajor');
   ensureU8(versionMinor, 'versionMinor');
+  if (versionMajor !== KEY_FORMAT_VERSION_MAJOR) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, {
+      field: 'versionMajor',
+      versionMajor,
+      expectedMajor: KEY_FORMAT_VERSION_MAJOR,
+    });
+  }
+  if (versionMinor > KEY_FORMAT_VERSION_MINOR) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, {
+      field: 'versionMinor',
+      versionMinor,
+      maxSupportedMinor: KEY_FORMAT_VERSION_MINOR,
+    });
+  }
   ensureSuiteIdSupported(suiteId);
   ensureUint8Array(keyBytes, ErrorCode.E_FORMAT_LENGTH, 'keyBytes');
   const wireLengths = getSuiteWireLengths(suiteId);
@@ -911,6 +998,13 @@ function parseKeyFile(bytes, expectedMagic) {
   if (versionMajor !== KEY_FORMAT_VERSION_MAJOR) {
     throw createError(ErrorCode.E_FORMAT_VERSION, { versionMajor, expectedMajor: KEY_FORMAT_VERSION_MAJOR });
   }
+  if (versionMinor > KEY_FORMAT_VERSION_MINOR) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, {
+      field: 'versionMinor',
+      versionMinor,
+      maxSupportedMinor: KEY_FORMAT_VERSION_MINOR,
+    });
+  }
 
   const suiteId = reader.u8(ErrorCode.E_SUITE_UNSUPPORTED);
   ensureSuiteIdSupported(suiteId);
@@ -940,7 +1034,7 @@ function parseKeyFile(bytes, expectedMagic) {
   const keyBytes = reader.take(keyLen, ErrorCode.E_FORMAT_LENGTH);
   const crcRead = reader.u32(ErrorCode.E_FORMAT_CRC32);
 
-  const crcInput = bytes.subarray(0, bytes.length - 4);
+  const crcInput = reader.bytes.subarray(0, reader.bytes.length - 4);
   const crcExpected = crc32(crcInput);
   if (crcRead !== crcExpected) {
     throw createError(ErrorCode.E_FORMAT_CRC32, { expected: crcExpected, actual: crcRead });
@@ -1025,9 +1119,32 @@ export function detectMagic(bytes) {
 
 export function metadataToPlain(metadata) {
   const signerFingerprint = metadata.signerFingerprint ? unpackSignerFingerprint(metadata.signerFingerprint) : null;
+  let filesize;
+  if (metadata.filesize !== undefined) {
+    if (typeof metadata.filesize === 'number') {
+      if (!Number.isSafeInteger(metadata.filesize) || metadata.filesize < 0) {
+        throw createError(ErrorCode.E_FORMAT_LENGTH, {
+          field: 'filesize',
+          reason: 'unsafe_integer',
+          value: String(metadata.filesize),
+        });
+      }
+      filesize = metadata.filesize;
+    } else {
+      const normalizedFilesize = ensureU64(metadata.filesize, 'filesize');
+      if (normalizedFilesize > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw createError(ErrorCode.E_FORMAT_LENGTH, {
+          field: 'filesize',
+          reason: 'unsafe_integer',
+          value: normalizedFilesize.toString(),
+        });
+      }
+      filesize = Number(normalizedFilesize);
+    }
+  }
   return {
     filename: metadata.filename,
-    filesize: metadata.filesize !== undefined ? Number(metadata.filesize) : undefined,
+    filesize,
     createdAt: metadata.createdAt,
     signerFingerprintAlg: signerFingerprint ? getFingerprintName(signerFingerprint.algId) : undefined,
     signerFingerprintHex: signerFingerprint ? bytesToHexLower(signerFingerprint.digest) : undefined,

@@ -4,6 +4,7 @@ import { existsSync, watch } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildProject } from './build.mjs';
+import { DOCUMENT_CSP, STANDARD_SECURITY_HEADERS, WORKER_CSP } from './security-headers.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,9 +20,6 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
 };
-
-const DOCUMENT_CSP = "default-src 'self'; connect-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
-const WORKER_CSP = "default-src 'none'; connect-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'";
 
 async function serveFile(urlPath) {
   const filePath = path.join(distDir, urlPath === '/' ? 'index.html' : urlPath.replace(/^\//, ''));
@@ -54,9 +52,10 @@ async function main() {
       const response = await serveFile(url);
       const headers = {
         'Content-Type': response.type,
-        'X-Content-Type-Options': 'nosniff',
-        'Referrer-Policy': 'no-referrer',
+        ...STANDARD_SECURITY_HEADERS,
       };
+      // HSTS is ignored over this intentionally HTTP-only localhost server.
+      delete headers['Strict-Transport-Security'];
       if (url.endsWith('/assets/worker.js')) headers['Content-Security-Policy'] = WORKER_CSP;
       else if (url === '/' || url.endsWith('/index.html')) headers['Content-Security-Policy'] = DOCUMENT_CSP;
       res.writeHead(response.status, headers);

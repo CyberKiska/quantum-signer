@@ -17,6 +17,7 @@ import {
 } from './policy.js';
 import {
   HashAlgId,
+  QSIG_V2_CONTEXT,
   SignatureProfileId,
   SuiteId,
   buildSignedMessageV2,
@@ -33,7 +34,7 @@ import { getSuiteWireLengths } from './suite-metadata.js';
 export const DEFAULT_SUITE_ID = SuiteId.ML_DSA_87;
 export const DEFAULT_SLH_SUITE_ID = SuiteId.SLH_DSA_SHAKE_128S;
 export const DEFAULT_HASH_ALG_ID = HashAlgId.SHA3_512;
-export const QSIG_DEFAULT_CTX = 'quantum-signer/v2';
+export const QSIG_DEFAULT_CTX = QSIG_V2_CONTEXT;
 
 const SUITE_REGISTRY = new Map([
   [
@@ -302,10 +303,33 @@ export function verifyBytes({
 }) {
   const suite = getSuite(suiteId);
   validateBytes(message, 'message');
-  assertSignatureLength(suiteId, signature);
-  assertKeyLength(suiteId, publicKey, 'public');
-  const context = normalizeContextBytes(contextBytes);
   assertSignatureProfileCompatible(suite, signatureProfileId);
+
+  // Signature, public-key, and context bytes are attacker-controlled during
+  // verification. Keep the verification surface total for malformed values:
+  // invalid encodings and lengths are an invalid signature, not an exceptional
+  // application state. Unsupported suites/profiles still fail above.
+  if (!(signature instanceof Uint8Array) || signature.length !== suite.signer.lengths.signature) {
+    return false;
+  }
+  if (!(publicKey instanceof Uint8Array) || publicKey.length !== suite.signer.lengths.publicKey) {
+    return false;
+  }
+
+  let context;
+  if (contextBytes !== undefined && contextBytes !== null) {
+    if (!(contextBytes instanceof Uint8Array) || contextBytes.length > MAX_CONTEXT_BYTES) {
+      return false;
+    }
+    context = contextBytes;
+  }
+  if (
+    signatureProfileId === SignatureProfileId.PQ_DETACHED_EXTERNAL_CONTEXT_V2 &&
+    (!context || context.length === 0)
+  ) {
+    return false;
+  }
+
   const signedMessage = buildSignedMessageV2({
     signatureProfileId,
     tbs: message,
@@ -343,7 +367,13 @@ export async function hashFileSHA3512(file, { chunkSize = DEFAULT_HASH_CHUNK_SIZ
     const end = Math.min(offset + effectiveChunkSize, total);
     const chunk = file.slice(offset, end);
     const chunkBytes = new Uint8Array(await chunk.arrayBuffer());
-    hasher.update(chunkBytes);
+    try {
+      hasher.update(chunkBytes);
+    } finally {
+      // Best-effort privacy hygiene for transient file copies. This cannot
+      // erase browser/OS caches or copies retained by the JS engine.
+      wipeBytes(chunkBytes);
+    }
     offset = end;
     if (typeof onProgress === 'function') onProgress(offset, total);
   }

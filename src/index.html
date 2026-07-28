@@ -23,7 +23,7 @@
     <meta name="base-path" content="%BASE_PATH%" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; connect-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
+      content="default-src 'none'; connect-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; worker-src 'self'; frame-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
     />
     <meta name="referrer" content="no-referrer" />
     <title>Quantum Signer</title>
@@ -35,7 +35,7 @@
         <div>
           <div class="header-group">
             <h1>Quantum Signer</h1>
-            <p class="subtitle">FIPS 204/205/Falcon<br />Web PQ sign tool</p>
+            <p class="subtitle">Experimental browser PQ<br />detached signatures</p>
           </div>
 
           <nav class="nav-menu" role="tablist" aria-label="Primary">
@@ -65,6 +65,8 @@
           <div class="sidebar-note">
             Memory-only session.<br />
             No network calls.<br />
+            Not FIPS validated.<br />
+            Avoid high-value keys.<br />
             <a href="https://github.com/CyberKiska/quantum-signer" target="_blank" rel="noopener noreferrer">Source code</a>
           </div>
         </div>

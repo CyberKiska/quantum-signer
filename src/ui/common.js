@@ -55,8 +55,14 @@ export function downloadBytes(filename, bytes, mime = 'application/octet-stream'
   const link = document.createElement('a');
   link.href = url;
   link.download = filename;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 100);
+  link.hidden = true;
+  document.body.append(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
 export function setProgress(progressEl, labelEl, loaded, total) {
@@ -95,37 +101,57 @@ export function workerFriendlyError(error) {
   return 'An unknown error occurred.';
 }
 
-export function createWorkerClient(workerUrl) {
-  const worker = new Worker(workerUrl, { type: 'module' });
+export function createWorkerClient(
+  workerUrl,
+  {
+    workerFactory = (url) => new Worker(url, { type: 'module' }),
+    setTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
+    clearTimer = (timer) => globalThis.clearTimeout(timer),
+  } = {}
+) {
+  let worker = null;
+  let destroyed = false;
   let seq = 0;
   const pending = new Map();
-  const abandoned = new Map();
+  const invalidationListeners = new Set();
   const defaultTimeoutMs = 60_000;
-  const abandonedRetentionMs = 15 * 60_000;
 
   function clearPendingTimer(entry) {
-    if (entry?.timer) clearTimeout(entry.timer);
+    if (entry?.timer !== undefined && entry?.timer !== null) clearTimer(entry.timer);
   }
 
-  worker.onmessage = (event) => {
-    const msg = event.data || {};
-    const p = pending.get(msg.id);
-    if (!p) {
-      const abandonedEntry = abandoned.get(msg.id);
-      if (abandonedEntry && msg.type !== 'PROGRESS') {
-        clearTimeout(abandonedEntry.timer);
-        abandoned.delete(msg.id);
-        const handle = msg.type === 'RESULT' ? msg.result?.sessionHandle : null;
-        if (typeof handle === 'string' && handle.length > 0) {
-          worker.postMessage({
-            id: `late-cleanup-${Date.now()}-${seq++}`,
-            type: 'CLEAR_SECRET_SESSION',
-            payload: { secretSessionHandle: handle },
-          });
-        }
+  function notifySecretSessionInvalidated(event) {
+    for (const listener of invalidationListeners) {
+      try {
+        listener(event);
+      } catch (_err) {
+        // One UI subscriber must not prevent other subscribers from clearing
+        // capabilities after a worker reset or expired secret session.
       }
+    }
+  }
+
+  function rejectAllPending(message) {
+    for (const entry of pending.values()) {
+      clearPendingTimer(entry);
+      entry.reject(new Error(message));
+    }
+    pending.clear();
+  }
+
+  function handleWorkerMessage(boundWorker, event) {
+    if (worker !== boundWorker || destroyed) return;
+    const msg = event.data || {};
+    if (msg.type === 'SECRET_SESSION_INVALIDATED') {
+      notifySecretSessionInvalidated({
+        reason: msg.reason || 'session-invalidated',
+        sessionHandle: typeof msg.secretSessionHandle === 'string' ? msg.secretSessionHandle : null,
+      });
       return;
     }
+
+    const p = pending.get(msg.id);
+    if (!p) return;
 
     if (msg.type === 'PROGRESS') {
       if (typeof p.onProgress === 'function') p.onProgress(msg);
@@ -144,33 +170,80 @@ export function createWorkerClient(workerUrl) {
       clearPendingTimer(p);
       const err = new Error(msg.message || 'Worker error');
       err.code = msg.code;
+      if (msg.code === 'E_SESSION_MISSING' && p.secretSessionHandle) {
+        notifySecretSessionInvalidated({
+          reason: 'session-missing',
+          sessionHandle: p.secretSessionHandle,
+        });
+      }
       p.reject(err);
     }
-  };
-
-  function rejectAllPending(message) {
-    for (const entry of pending.values()) {
-      clearPendingTimer(entry);
-      entry.reject(new Error(message));
-    }
-    pending.clear();
   }
 
-  worker.onerror = () => rejectAllPending('Cryptographic worker failed');
-  worker.onmessageerror = () => rejectAllPending('Cryptographic worker returned an unreadable message');
+  function attachWorker(nextWorker) {
+    worker = nextWorker;
+    nextWorker.onmessage = (event) => handleWorkerMessage(nextWorker, event);
+    nextWorker.onerror = () => {
+      if (worker === nextWorker) failWorker('Cryptographic worker failed');
+    };
+    nextWorker.onmessageerror = () => {
+      if (worker === nextWorker) failWorker('Cryptographic worker returned an unreadable message');
+    };
+  }
+
+  function startWorker() {
+    if (destroyed) throw new Error('Cryptographic worker client was destroyed');
+    const nextWorker = workerFactory(workerUrl);
+    if (!nextWorker || typeof nextWorker.postMessage !== 'function' || typeof nextWorker.terminate !== 'function') {
+      throw new Error('Cryptographic worker factory returned an invalid worker');
+    }
+    attachWorker(nextWorker);
+    return nextWorker;
+  }
+
+  function failWorker(reason) {
+    const previous = worker;
+    worker = null;
+    if (previous) previous.terminate();
+    rejectAllPending(reason);
+    // Do not immediately construct another worker from an asynchronous error
+    // callback. A broken URL, MIME type, CSP, or module would otherwise create
+    // an unbounded crash/restart loop. The next explicit call makes one retry.
+    notifySecretSessionInvalidated({ reason: 'worker-failed', sessionHandle: null, restarted: false });
+  }
+
+  startWorker();
 
   function call(type, payload, options = {}) {
     const id = `${Date.now()}-${seq++}`;
-    const timeoutMs = options.timeoutMs || defaultTimeoutMs;
+    const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 0x7fffffff) {
+      return Promise.reject(new RangeError('timeoutMs must be a finite positive number no greater than 2147483647'));
+    }
 
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      if (destroyed) {
+        reject(new Error('Cryptographic worker client was destroyed'));
+        return;
+      }
+      if (!worker) {
+        try {
+          startWorker();
+        } catch (err) {
+          reject(err);
+          return;
+        }
+      }
+
+      const timer = setTimer(() => {
         const p = pending.get(id);
         if (p) {
           pending.delete(id);
-          const abandonedTimer = setTimeout(() => abandoned.delete(id), abandonedRetentionMs);
-          abandoned.set(id, { type, timer: abandonedTimer });
-          reject(new Error(`Operation timed out after ${timeoutMs}ms`));
+          reject(
+            new Error(
+              `Operation timed out after ${timeoutMs}ms. The worker was left running to preserve any in-memory private key; wait for it to become responsive before retrying.`
+            )
+          );
         }
       }, timeoutMs);
 
@@ -179,18 +252,34 @@ export function createWorkerClient(workerUrl) {
         reject,
         timer,
         onProgress: options.onProgress,
+        secretSessionHandle:
+          typeof payload?.secretSessionHandle === 'string' ? payload.secretSessionHandle : null,
       });
 
-      worker.postMessage({ id, type, payload });
+      try {
+        worker.postMessage({ id, type, payload });
+      } catch (err) {
+        pending.delete(id);
+        clearPendingTimer({ timer });
+        reject(err);
+      }
     });
   }
 
-  function destroy() {
-    rejectAllPending('Cryptographic worker was terminated');
-    for (const entry of abandoned.values()) clearTimeout(entry.timer);
-    abandoned.clear();
-    worker.terminate();
+  function onSecretSessionInvalidated(listener) {
+    if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+    invalidationListeners.add(listener);
+    return () => invalidationListeners.delete(listener);
   }
 
-  return { call, destroy };
+  function destroy() {
+    if (destroyed) return;
+    destroyed = true;
+    rejectAllPending('Cryptographic worker was terminated');
+    if (worker) worker.terminate();
+    worker = null;
+    invalidationListeners.clear();
+  }
+
+  return { call, destroy, onSecretSessionInvalidated };
 }

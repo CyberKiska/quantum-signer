@@ -1,9 +1,13 @@
-name: Deploy to GitHub Pages
+name: Manual GitHub Pages Preview
+run-name: Manual Pages preview by @${{ github.actor }}
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      acknowledge_public_preview:
+        description: Acknowledge that this is a public preview, not a production release
+        required: true
+        type: boolean
 
 permissions:
   contents: read
@@ -11,11 +15,12 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: pages-preview
   cancel-in-progress: true
 
 jobs:
   build:
+    if: ${{ inputs.acknowledge_public_preview }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,12 +52,13 @@ jobs:
           path: dist
 
   deploy:
+    if: ${{ inputs.acknowledge_public_preview }}
     needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
+      - name: Deploy public preview to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

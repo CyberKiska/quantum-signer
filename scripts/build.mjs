@@ -2,6 +2,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { buildStaticHeadersFile } from './security-headers.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,11 +46,13 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
   ]);
 
   const html = htmlTemplate.replaceAll('%BASE_PATH%', basePath);
+  const staticHeaders = buildStaticHeadersFile(basePath);
 
   await Promise.all([
     writeFile(path.join(distDir, 'index.html'), html, 'utf8'),
     writeFile(path.join(distDir, 'styles.css'), css, 'utf8'),
     writeFile(path.join(distDir, '.nojekyll'), '', 'utf8'),
+    writeFile(path.join(distDir, '_headers'), staticHeaders, 'utf8'),
   ]);
 
   console.log(`Build completed. basePath=${basePath}`);

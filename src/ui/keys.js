@@ -244,6 +244,30 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     notifyKeysUpdated(state);
   }
 
+  workerClient.onSecretSessionInvalidated(({ reason, sessionHandle }) => {
+    const activeHandle = state.keys.secret?.sessionHandle || null;
+    if (sessionHandle && activeHandle !== sessionHandle) {
+      forgetExportConsent(sessionHandle);
+      return;
+    }
+
+    if (sessionHandle) forgetExportConsent(sessionHandle);
+    else secretExportConsentTokens.clear();
+    if (!state.keys.secret) return;
+
+    state.keys.secret = null;
+    // Do not release an in-flight key transaction here. Its own finally block
+    // retains ownership of the busy state, preventing an expiry notification
+    // from enabling a second key operation before the first one settles.
+    syncUi();
+    showToast(
+      'warning',
+      reason === 'idle-timeout' || reason === 'session-missing'
+        ? 'Private-key session expired and was cleared. The public key remains loaded for verification.'
+        : 'Cryptographic worker failed; the private-key session was cleared. A new worker will start on the next operation. The public key remains loaded for verification.'
+    );
+  });
+
   suiteSelect.addEventListener('change', refreshSuiteWarning);
 
   generateBtn.addEventListener('click', async () => {
@@ -373,26 +397,44 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
       return;
     }
     let secretKeyFile = null;
+    const exportingSession = state.keys.secret;
     try {
       setKeyOperationBusy(true);
-      const exportConsentToken = secretExportConsentTokens.get(state.keys.secret.sessionHandle);
+      const exportConsentToken = secretExportConsentTokens.get(exportingSession.sessionHandle);
       if (typeof exportConsentToken !== 'string' || exportConsentToken.length === 0) {
         throw new Error('Private key export authorization is unavailable. Re-import or regenerate the private-key session.');
       }
       const result = await workerClient.call(
         'EXPORT_SECRET',
         {
-          secretSessionHandle: state.keys.secret.sessionHandle,
+          secretSessionHandle: exportingSession.sessionHandle,
           exportConsentToken,
         },
         { timeoutMs: SECRET_SESSION_TIMEOUT_MS }
       );
       secretKeyFile = result.secretKeyFile;
-      const name = safeFileName(`${getSuiteName(state.keys.secret.suiteId)}-${state.keys.secret.fingerprintShort}.pqsk`);
+      const name = safeFileName(
+        `${getSuiteName(exportingSession.suiteId)}-${exportingSession.fingerprintShort}.pqsk`
+      );
       downloadBytes(name, secretKeyFile);
-      state.keys.secret.exported = true;
+      // Yield once so the browser can begin its download/save UI before the
+      // explicit user-attestation prompt is displayed.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const exportConfirmed = confirm(
+        `The browser was asked to save ${name}. Verify that the file exists in the intended location, then click OK. ` +
+          'Choose Cancel if the download was blocked, cancelled, or not yet verified; the key will remain marked unexported.'
+      );
+      const activeSessionStillMatches = state.keys.secret?.sessionHandle === exportingSession.sessionHandle;
+      if (activeSessionStillMatches) state.keys.secret.exported = exportConfirmed;
       syncUi();
-      showToast('success', 'Private key exported');
+      showToast(
+        exportConfirmed && activeSessionStillMatches ? 'success' : 'warning',
+        !activeSessionStillMatches
+          ? 'Private-key download was requested, but the in-memory session expired before export could be confirmed'
+          : exportConfirmed
+          ? 'Private-key export confirmed by user'
+          : 'Private-key download was requested but remains marked unexported'
+      );
     } catch (err) {
       showToast('error', workerFriendlyError(err));
     } finally {

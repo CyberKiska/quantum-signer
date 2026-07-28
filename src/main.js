@@ -44,15 +44,32 @@ function wipeStateBytes(appState) {
 
 function enforceTopLevelBrowsingContext() {
   if (window.top === window.self) return;
-  document.body.replaceChildren();
-  const message = document.createElement('p');
-  message.textContent = 'Quantum Signer refuses to run inside an embedded frame. Open it directly.';
-  document.body.append(message);
   throw new Error('Embedded execution is not allowed');
+}
+
+function enforceSecureContext() {
+  // Browsers classify HTTPS, localhost, and trustworthy local file contexts.
+  // Rely on that platform decision instead of maintaining a URL allowlist.
+  if (globalThis.isSecureContext === true) return;
+  throw new Error('Quantum Signer requires a secure browser context. Open it over HTTPS or from a browser-trusted local context.');
+}
+
+function renderFatalStartupError(message) {
+  document.body.replaceChildren();
+  const container = document.createElement('main');
+  container.setAttribute('role', 'alert');
+  container.className = 'main-content';
+  const heading = document.createElement('h1');
+  heading.textContent = 'Quantum Signer cannot start';
+  const detail = document.createElement('p');
+  detail.textContent = message;
+  container.append(heading, detail);
+  document.body.append(container);
 }
 
 async function main() {
   enforceTopLevelBrowsingContext();
+  enforceSecureContext();
   const basePath = getBasePath();
   const workerUrl = `${basePath}assets/worker.js`;
   const workerClient = createWorkerClient(workerUrl);
@@ -98,5 +115,5 @@ async function main() {
 }
 
 main().catch((err) => {
-  showToast('error', workerFriendlyError(err));
+  renderFatalStartupError(workerFriendlyError(err));
 });

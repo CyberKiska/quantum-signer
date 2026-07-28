@@ -84,6 +84,12 @@ function renderVerifyResult(result) {
   const lines = [];
   lines.push(`Valid: ${result.valid ? 'YES' : 'NO'}`);
   lines.push(`Cryptographic verification: ${result.cryptoValid ? 'YES' : 'NO'}`);
+  if (result.signatureEvaluated) {
+    lines.push(`Container signature policy: ${result.signaturePolicyValid ? 'PASS' : 'FAIL'}`);
+  }
+  if (typeof result.payloadMatches === 'boolean') {
+    lines.push(`Payload digest match: ${result.payloadMatches ? 'YES' : 'NO'}`);
+  }
   lines.push(`Externally supplied verification key accepted: ${result.trusted ? 'YES' : 'NO'}`);
   lines.push(`Trust source: ${describeTrustSource(result)}`);
   lines.push(`Verified key source: ${describeVerifiedKeySource(result)}`);
@@ -97,7 +103,10 @@ function renderVerifyResult(result) {
 
   if (result.signerFingerprintHex) lines.push(`Verification key fingerprint (SHA3-256): ${result.signerFingerprintHex}`);
   if (result.signatureMetadataFingerprintHex) {
-    lines.push(`Signature metadata fingerprint (SHA3-256): ${result.signatureMetadataFingerprintHex}`);
+    const label = result.signaturePolicyValid
+      ? 'Authenticated signer fingerprint metadata'
+      : 'Declared signer fingerprint metadata (not authenticated)';
+    lines.push(`${label} (SHA3-256): ${result.signatureMetadataFingerprintHex}`);
   }
 
   if (result.keyMismatch) {
@@ -112,7 +121,8 @@ function renderVerifyResult(result) {
 
   if (result.computedHashHex) lines.push(`Computed hash: ${result.computedHashHex}`);
   if (result.providedHashHex) lines.push(`Provided hash: ${result.providedHashHex}`);
-  if (result.signedHashHex) lines.push(`Signed hash:   ${result.signedHashHex}`);
+  if (result.declaredHashHex) lines.push(`Declared payload hash: ${result.declaredHashHex}`);
+  if (result.signedHashHex) lines.push(`Signature-authenticated payload hash: ${result.signedHashHex}`);
 
   if (result.code) lines.push(`Error code: ${result.code}`);
   if (result.warning) lines.push(`Warning: ${result.warning}`);
@@ -543,32 +553,28 @@ export function setupVerifyTab(state, workerClient) {
       const loadedValid = result.loadedKeyValid === true;
       const embeddedValid = result.embeddedKeyValid === true;
 
-      setResultTone('warning', 'WARNING');
-      resultIcon.textContent = '⚠️';
-
-      if (loadedValid && embeddedValid) {
-        resultHeading.textContent = 'Signature Valid With Key Mismatch';
-        resultMessage.textContent =
-          'Both loaded and embedded public keys verify this signature, but they are different keys.';
-        showToast('warning', 'Key mismatch detected');
-        return;
-      }
-
-      if (result.valid) {
-        resultHeading.textContent = 'Signature Valid With Key Mismatch';
-        resultMessage.textContent =
-          'Signature is valid with the loaded public key, but embedded signer metadata in .qsig does not match it.';
-        showToast('warning', 'Key mismatch detected');
-        return;
-      }
-
       setResultTone('invalid', 'INVALID');
       resultIcon.textContent = '❌';
-      resultHeading.textContent = 'Verification Failed';
+      resultHeading.textContent = 'Signer Binding Mismatch';
+
+      if (loadedValid && embeddedValid) {
+        resultMessage.textContent =
+          'Both keys verify, but the loaded key differs from the signer key authenticated inside .qsig. The container is rejected.';
+        showToast('error', 'Signer binding mismatch');
+        return;
+      }
+
+      if (loadedValid) {
+        resultMessage.textContent =
+          'The loaded key verifies the bytes, but it is not the signer key authenticated by .qsig. The container is rejected.';
+        showToast('error', 'Signer binding mismatch');
+        return;
+      }
+
       resultMessage.textContent = embeddedValid
-        ? 'Signature matches the embedded key in .qsig, but it does not match the loaded public key.'
+        ? 'The signature matches the embedded signer key, but it does not match the public key you selected.'
         : 'Verification failed for both loaded and embedded public keys.';
-      showToast('error', 'Verification failed');
+      showToast('error', 'Signer binding mismatch');
       return;
     }
 
@@ -599,6 +605,9 @@ export function setupVerifyTab(state, workerClient) {
 
     if (result.code === 'E_INPUT_REQUIRED') {
       resultMessage.textContent = 'No verification key is available. Load a public key or use a .qsig with embedded signer metadata.';
+    } else if (result.code === 'E_FILE_HASH_MISMATCH') {
+      resultMessage.textContent =
+        'The container signature is valid, but it authenticates a different payload digest than the input you provided.';
     } else {
       resultMessage.textContent = result.cryptoValid
         ? 'Cryptographic verification succeeded with a non-trusted key source, but final verification failed under the current trust policy.'
@@ -653,7 +662,7 @@ export function setupVerifyTab(state, workerClient) {
       authDigestAlgId: signaturePreview.authDigestAlgId,
       context: signaturePreview.context,
       signatureLength: signaturePreview.signatureLength,
-      signedHashHex: signaturePreview.payloadDigestHex,
+      declaredHashHex: signaturePreview.payloadDigestHex,
       embeddedFingerprintHex: signaturePreview.embeddedFingerprintHex,
       loadedKeyFingerprintHex: state.keys.public?.fingerprintHex ?? null,
     };
@@ -691,11 +700,11 @@ export function setupVerifyTab(state, workerClient) {
       const resultInputHashHex = result.computedHashHex || result.providedHashHex || null;
       const resultLoadedKeyFingerprintHex =
         result.loadedKeyFingerprintHex || (result.keySource === 'keys' ? result.signerFingerprintHex : null);
-      const verificationKeyWasEvaluated = resultInputHashHex === result.signedHashHex;
+      const verificationKeyWasEvaluated = result.signatureEvaluated === true;
       if (
         resultInputHashHex !== reviewSnapshot.inputHashHex ||
         result.inputLength !== reviewSnapshot.inputLength ||
-        result.signedHashHex !== reviewSnapshot.signedHashHex ||
+        result.declaredHashHex !== reviewSnapshot.declaredHashHex ||
         result.suiteId !== reviewSnapshot.suiteId ||
         result.signatureProfileId !== reviewSnapshot.signatureProfileId ||
         result.hashAlgId !== reviewSnapshot.hashAlgId ||

@@ -10,7 +10,6 @@ import {
   hashBytesSHA3512,
   hashFileSHA3512,
   signBytes,
-  signBytesVerified,
   verifyBytes,
 } from './algorithms.js';
 import {
@@ -20,18 +19,26 @@ import {
 } from './policy.js';
 import { createSecretSessionManager } from './secret-session.js';
 import { normalizeMetadata } from './validate.js';
-import { finalizeVerification } from './verify-policy.js';
+import { ErrorCode } from './errors.js';
+import { finalizePayloadVerification, finalizeVerification } from './verify-policy.js';
 import {
   AuthDigestAlgId,
   FingerprintAlgId,
   HashAlgId,
+  KEY_FORMAT_VERSION_MAJOR,
+  KEY_FORMAT_VERSION_MINOR,
+  MetadataTag,
+  QSIG_FORMAT_VERSION_MAJOR,
+  QSIG_FORMAT_VERSION_MINOR,
   SignatureProfileId,
   SuiteId,
   buildTBSV2,
   computeAuthMetaDigestV2,
+  metadataToPlain,
   packPublicKey,
   packSecretKey,
   packAuthenticatedMetadataV2,
+  packDisplayMetadataV2,
   packSignatureV2,
   packSignerFingerprint,
   unpackPublicKey,
@@ -44,6 +51,7 @@ import { base64ToBytes, base64UrlToBytes } from '../formats/encoding.js';
 import { createOperationGate } from '../core/operation-gate.js';
 
 const QSIG_V2_SIG_HEADER_LENGTH = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 64 + 32 + 1 + 1 + 2 + 2 + 4;
+const FORMAT_VERSION_MINOR_OFFSET = 5;
 const QSIG_V2_SIGNATURE_PROFILE_OFFSET = 7;
 const QSIG_V2_FLAGS_OFFSET = 10;
 const QSIG_V2_DISPLAY_META_LEN_OFFSET = 112;
@@ -443,6 +451,9 @@ function buildCases(suites) {
         if (result.valid || !result.cryptoValid || result.keyMismatch !== true) {
           throw new Error('wrong loaded key did not produce mismatch semantics');
         }
+        if (result.code !== ErrorCode.E_SIGNER_BINDING_MISMATCH) {
+          throw new Error('wrong loaded key did not fail signer-binding policy');
+        }
         if (result.trustSource !== 'key-mismatch' || result.verifiedKeySource !== 'signature') {
           throw new Error('wrong loaded key mismatch trust semantics are incorrect');
         }
@@ -453,7 +464,7 @@ function buildCases(suites) {
     });
 
     cases.push({
-      name: `${prefix}: inconsistent embedded metadata must still verify only with loaded key`,
+      name: `${prefix}: inconsistent embedded signer metadata must fail container policy`,
       fn: async () => {
         const signingKeys = generateKeypair(suiteId);
         const embeddedKeys = generateKeypair(suiteId);
@@ -473,8 +484,11 @@ function buildCases(suites) {
           inputLength: payload.length,
         });
 
-        if (!result.valid || !result.cryptoValid || result.keyMismatch !== true) {
+        if (result.valid || !result.cryptoValid || result.keyMismatch !== true) {
           throw new Error('inconsistent embedded metadata did not produce expected mismatch state');
+        }
+        if (result.code !== ErrorCode.E_SIGNER_BINDING_MISMATCH || result.trusted !== false) {
+          throw new Error('inconsistent embedded metadata bypassed signer-binding policy');
         }
         if (result.trustSource !== 'key-mismatch' || result.verifiedKeySource !== 'loaded') {
           throw new Error('inconsistent embedded metadata trust semantics are incorrect');
@@ -485,6 +499,61 @@ function buildCases(suites) {
       },
     });
   }
+
+  cases.push({
+    name: 'payload mismatch must not skip signature verification or authenticate an invalid container',
+    fn: async () => {
+      const suiteId = SuiteId.ML_DSA_44;
+      const keys = generateKeypair(suiteId);
+      const payload = textBytes('payload-verification-policy-check');
+      const otherPayloadHashHex = bytesToHexLower(hashBytesSHA3512(textBytes('different-payload')));
+      const { sigFile } = buildSignatureContainer({
+        suiteId,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const parsedValid = unpackSignatureV2(sigFile);
+      const declaredHashHex = bytesToHexLower(parsedValid.fileHash);
+      const mismatchResult = finalizePayloadVerification(parsedValid, null, {
+        inputKind: 'text',
+        inputLength: payload.length,
+        providedHashHex: otherPayloadHashHex,
+      });
+
+      if (
+        mismatchResult.valid ||
+        !mismatchResult.cryptoValid ||
+        !mismatchResult.signaturePolicyValid ||
+        mismatchResult.payloadMatches ||
+        mismatchResult.code !== ErrorCode.E_FILE_HASH_MISMATCH ||
+        mismatchResult.signedHashHex !== declaredHashHex
+      ) {
+        throw new Error('valid signature over a different payload was reported incorrectly');
+      }
+
+      const parsedTampered = unpackSignatureV2(sigFile);
+      parsedTampered.signature[0] ^= 0x01;
+      const invalidResult = finalizePayloadVerification(parsedTampered, null, {
+        inputKind: 'text',
+        inputLength: payload.length,
+        providedHashHex: otherPayloadHashHex,
+      });
+
+      if (
+        invalidResult.valid ||
+        invalidResult.cryptoValid ||
+        invalidResult.signaturePolicyValid ||
+        invalidResult.payloadMatches ||
+        invalidResult.code !== ErrorCode.E_SIGNATURE_INVALID ||
+        invalidResult.signedHashHex !== null ||
+        invalidResult.declaredHashHex !== declaredHashHex
+      ) {
+        throw new Error('invalid signature metadata was presented as signature-authenticated');
+      }
+    },
+  });
 
   cases.push({
     name: 'cross-suite loaded public key must be rejected',
@@ -522,7 +591,7 @@ function buildCases(suites) {
   });
 
   cases.push({
-    name: 'Falcon-512-padded: mutating stored .qsig context must break verification',
+    name: 'Falcon-512-padded: non-standard stored .qsig context must fail parse',
     fn: async () => {
       const suiteId = SuiteId.FALCON_512_PADDED;
       const keys = generateKeypair(suiteId);
@@ -541,22 +610,17 @@ function buildCases(suites) {
       }
       tampered[QSIG_V2_SIG_HEADER_LENGTH] ^= 0x01;
 
-      const parsedSig = unpackSignatureV2(tampered);
-      if (parsedSig.ctx === QSIG_DEFAULT_CTX) {
-        throw new Error('stored context mutation did not change parsed context');
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed =
+          err?.code === 'E_FORMAT_FLAGS' &&
+          err?.details?.field === 'ctx' &&
+          err?.details?.reason === 'unsupported_context';
       }
-
-      const valid = verifyBytes({
-        suiteId,
-        signatureProfileId: parsedSig.signatureProfileId,
-        message: parsedSig.tbs,
-        signature: parsedSig.signature,
-        publicKey: keys.publicKey,
-        contextBytes: parsedSig.ctxBytes,
-      });
-
-      if (valid) {
-        throw new Error('Falcon signature unexpectedly verified after stored context mutation');
+      if (!failed) {
+        throw new Error('non-standard stored context unexpectedly parsed');
       }
     },
   });
@@ -676,6 +740,54 @@ function buildCases(suites) {
   });
 
   cases.push({
+    name: 'parsed container fields must not alias caller-owned input bytes',
+    fn: async () => {
+      const suiteId = SuiteId.ML_DSA_44;
+      const keys = generateKeypair(suiteId);
+      const payload = textBytes('parsed-field-ownership-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+      const parsedSig = unpackSignatureV2(sigFile);
+      const parsedSignatureHex = bytesToHexLower(parsedSig.signature);
+      const parsedContextHex = bytesToHexLower(parsedSig.ctxBytes);
+      const parsedDigestHex = bytesToHexLower(parsedSig.payloadDigest);
+      sigFile.fill(0);
+
+      if (
+        bytesToHexLower(parsedSig.signature) !== parsedSignatureHex ||
+        bytesToHexLower(parsedSig.ctxBytes) !== parsedContextHex ||
+        bytesToHexLower(parsedSig.payloadDigest) !== parsedDigestHex
+      ) {
+        throw new Error('parsed signature fields changed after caller input was wiped');
+      }
+      if (
+        !verifyBytes({
+          suiteId,
+          signatureProfileId: parsedSig.signatureProfileId,
+          message: parsedSig.tbs,
+          signature: parsedSig.signature,
+          publicKey: keys.publicKey,
+          contextBytes: parsedSig.ctxBytes,
+        })
+      ) {
+        throw new Error('parsed signature no longer verified after caller input was wiped');
+      }
+
+      const publicKeyFile = packPublicKey({ suiteId, keyBytes: keys.publicKey });
+      const parsedPublicKey = unpackPublicKey(publicKeyFile);
+      const parsedPublicKeyHex = bytesToHexLower(parsedPublicKey.keyBytes);
+      publicKeyFile.fill(0);
+      if (bytesToHexLower(parsedPublicKey.keyBytes) !== parsedPublicKeyHex) {
+        throw new Error('parsed public key changed after caller input was wiped');
+      }
+    },
+  });
+
+  cases.push({
     name: 'malformed signature container must fail parse',
     fn: async () => {
       const keys = generateKeypair(SuiteId.ML_DSA_87);
@@ -696,6 +808,133 @@ function buildCases(suites) {
       if (!failed) {
         throw new Error('invalid magic unexpectedly parsed');
       }
+    },
+  });
+
+  cases.push({
+    name: 'unsupported .qsig minor version must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_44);
+      const payload = textBytes('signature-minor-version-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_44,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+      const parsed = unpackSignatureV2(sigFile);
+      const packOptions = {
+        suiteId: parsed.suiteId,
+        signatureProfileId: parsed.signatureProfileId,
+        payloadDigestAlgId: parsed.payloadDigestAlgId,
+        authDigestAlgId: parsed.authDigestAlgId,
+        payloadDigest: parsed.payloadDigest,
+        authMetaDigest: parsed.authMetaDigest,
+        signature: parsed.signature,
+        ctx: QSIG_DEFAULT_CTX,
+        authenticatedMetadata: parsed.authenticatedMetadata,
+        displayMetadata: parsed.displayMetadata,
+      };
+      let packMajorFailed = false;
+      try {
+        packSignatureV2({
+          ...packOptions,
+          versionMajor: QSIG_FORMAT_VERSION_MAJOR + 1,
+        });
+      } catch (err) {
+        packMajorFailed = err?.code === 'E_FORMAT_VERSION' && err?.details?.field === 'versionMajor';
+      }
+      if (!packMajorFailed) throw new Error('signature packer accepted an unsupported major version');
+
+      let packVersionFailed = false;
+      try {
+        packSignatureV2({
+          ...packOptions,
+          versionMinor: QSIG_FORMAT_VERSION_MINOR + 1,
+        });
+      } catch (err) {
+        packVersionFailed = err?.code === 'E_FORMAT_VERSION' && err?.details?.field === 'versionMinor';
+      }
+      if (!packVersionFailed) throw new Error('signature packer accepted an unsupported minor version');
+
+      let packContextFailed = false;
+      try {
+        packSignatureV2({ ...packOptions, ctx: 'other-application/v2' });
+      } catch (err) {
+        packContextFailed =
+          err?.code === 'E_FORMAT_FLAGS' &&
+          err?.details?.field === 'ctx' &&
+          err?.details?.reason === 'unsupported_context';
+      }
+      if (!packContextFailed) throw new Error('signature packer accepted a non-standard context');
+
+      const tampered = Uint8Array.from(sigFile);
+      tampered[FORMAT_VERSION_MINOR_OFFSET] = QSIG_FORMAT_VERSION_MINOR + 1;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_VERSION' && err?.details?.field === 'versionMinor';
+      }
+      if (!failed) throw new Error('unsupported .qsig minor version unexpectedly parsed');
+    },
+  });
+
+  cases.push({
+    name: 'unsupported key-container minor version must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_44);
+      let packMajorFailed = false;
+      try {
+        packPublicKey({
+          suiteId: SuiteId.ML_DSA_44,
+          keyBytes: keys.publicKey,
+          versionMajor: KEY_FORMAT_VERSION_MAJOR + 1,
+        });
+      } catch (err) {
+        packMajorFailed = err?.code === 'E_FORMAT_VERSION' && err?.details?.field === 'versionMajor';
+      }
+      if (!packMajorFailed) throw new Error('key packer accepted an unsupported major version');
+
+      let packFailed = false;
+      try {
+        packPublicKey({
+          suiteId: SuiteId.ML_DSA_44,
+          keyBytes: keys.publicKey,
+          versionMinor: KEY_FORMAT_VERSION_MINOR + 1,
+        });
+      } catch (err) {
+        packFailed = err?.code === 'E_FORMAT_VERSION' && err?.details?.field === 'versionMinor';
+      }
+      if (!packFailed) throw new Error('key packer accepted an unsupported minor version');
+
+      const compatibleOlderMinor = packPublicKey({
+        suiteId: SuiteId.ML_DSA_44,
+        keyBytes: keys.publicKey,
+        versionMinor: 0,
+      });
+      const parsedOlderMinor = unpackPublicKey(compatibleOlderMinor);
+      if (
+        parsedOlderMinor.versionMinor !== 0 ||
+        bytesToHexLower(parsedOlderMinor.keyBytes) !== bytesToHexLower(keys.publicKey)
+      ) {
+        throw new Error('supported older key-container minor version did not round-trip');
+      }
+
+      const publicKeyFile = packPublicKey({
+        suiteId: SuiteId.ML_DSA_44,
+        keyBytes: keys.publicKey,
+      });
+      publicKeyFile[FORMAT_VERSION_MINOR_OFFSET] = KEY_FORMAT_VERSION_MINOR + 1;
+
+      let failed = false;
+      try {
+        unpackPublicKey(publicKeyFile);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_VERSION' && err?.details?.field === 'versionMinor';
+      }
+      if (!failed) throw new Error('unsupported key-container minor version unexpectedly parsed');
     },
   });
 
@@ -725,6 +964,62 @@ function buildCases(suites) {
       if (!failed) {
         throw new Error('tampered authenticated metadata unexpectedly parsed');
       }
+    },
+  });
+
+  cases.push({
+    name: 'display-only tag in authenticated metadata must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_44);
+      const payload = textBytes('auth-metadata-namespace-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_44,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+      const tampered = Uint8Array.from(sigFile);
+      const { authMetaOffset } = getAuthMetadataOffsets(tampered);
+      tampered[authMetaOffset] = MetadataTag.FILENAME;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed =
+          err?.code === 'E_FORMAT_TLV' &&
+          err?.details?.field === 'authMeta' &&
+          err?.details?.reason === 'unexpected_tag';
+      }
+      if (!failed) throw new Error('display-only tag unexpectedly parsed in authenticated metadata');
+    },
+  });
+
+  cases.push({
+    name: 'authenticated-only tag in display metadata must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_44);
+      const payload = textBytes('display-metadata-namespace-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_44,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+      const tampered = Uint8Array.from(sigFile);
+      const { createdAtRecordOffset } = getDisplayCreatedAtRecordInfo(tampered);
+      tampered[createdAtRecordOffset] = MetadataTag.SIGNER_PUBLIC_KEY;
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed =
+          err?.code === 'E_FORMAT_TLV' &&
+          err?.details?.field === 'displayMeta' &&
+          err?.details?.reason === 'unexpected_tag';
+      }
+      if (!failed) throw new Error('authenticated-only tag unexpectedly parsed in display metadata');
     },
   });
 
@@ -843,6 +1138,40 @@ function buildCases(suites) {
       if (!failed) {
         throw new Error('unsupported fingerprint alg unexpectedly parsed');
       }
+    },
+  });
+
+  cases.push({
+    name: 'empty display filename must fail parse',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_44);
+      const payload = textBytes('empty-display-filename-check');
+      const { sigFile } = buildSignatureContainer({
+        suiteId: SuiteId.ML_DSA_44,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const { displayMetaOffset, displayMetaLen } = getDisplayMetadataOffsets(sigFile);
+      const sourceView = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
+      const filenameLen = sourceView.getUint16(displayMetaOffset + 1, true);
+      const filenameValueOffset = displayMetaOffset + 3;
+      const filenameValueEnd = filenameValueOffset + filenameLen;
+      const tampered = new Uint8Array(sigFile.length - filenameLen);
+      tampered.set(sigFile.subarray(0, filenameValueOffset), 0);
+      tampered.set(sigFile.subarray(filenameValueEnd), filenameValueOffset);
+      const tamperedView = new DataView(tampered.buffer, tampered.byteOffset, tampered.byteLength);
+      tamperedView.setUint16(displayMetaOffset + 1, 0, true);
+      tamperedView.setUint16(QSIG_V2_DISPLAY_META_LEN_OFFSET, displayMetaLen - filenameLen, true);
+
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'filename_empty';
+      }
+      if (!failed) throw new Error('empty display filename unexpectedly parsed');
     },
   });
 
@@ -1007,6 +1336,55 @@ function buildCases(suites) {
   });
 
   cases.push({
+    name: 'metadataToPlain must reject unsafe u64 filesize conversion',
+    fn: async () => {
+      const safe = metadataToPlain({ filesize: BigInt(Number.MAX_SAFE_INTEGER) });
+      if (safe.filesize !== Number.MAX_SAFE_INTEGER) {
+        throw new Error('maximum safe u64 filesize did not convert exactly');
+      }
+
+      for (const filesize of [
+        BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+        Number.MAX_SAFE_INTEGER + 1,
+      ]) {
+        let failed = false;
+        try {
+          metadataToPlain({ filesize });
+        } catch (err) {
+          failed =
+            err?.code === 'E_FORMAT_LENGTH' &&
+            err?.details?.field === 'filesize' &&
+            err?.details?.reason === 'unsafe_integer';
+        }
+        if (!failed) throw new Error(`unsafe filesize unexpectedly converted: ${String(filesize)}`);
+      }
+    },
+  });
+
+  cases.push({
+    name: 'display metadata packer must reject imprecise numeric u64 values',
+    fn: async () => {
+      const encoded = packDisplayMetadataV2({ filesize: Number.MAX_SAFE_INTEGER });
+      if (!(encoded instanceof Uint8Array) || encoded.length === 0) {
+        throw new Error('maximum safe numeric filesize did not encode');
+      }
+
+      for (const filesize of [Number.MAX_SAFE_INTEGER + 1, 1.5, Number.NaN]) {
+        let failed = false;
+        try {
+          packDisplayMetadataV2({ filesize });
+        } catch (err) {
+          failed =
+            err?.code === 'E_FORMAT_LENGTH' &&
+            err?.details?.field === 'filesize' &&
+            err?.details?.reason === 'unsafe_integer';
+        }
+        if (!failed) throw new Error(`imprecise numeric filesize unexpectedly encoded: ${String(filesize)}`);
+      }
+    },
+  });
+
+  cases.push({
     name: 'assertSignatureLength must reject invalid configured expected length',
     fn: async () => {
       const suite = getSuite(SuiteId.ML_DSA_44);
@@ -1052,6 +1430,97 @@ function buildCases(suites) {
       }
       if (!failed) {
         throw new Error('oversized context unexpectedly accepted');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'verification must return false for malformed untrusted key, signature, and context inputs',
+    fn: async () => {
+      const pqSuites = [
+        SuiteId.ML_DSA_44,
+        SuiteId.ML_DSA_65,
+        SuiteId.ML_DSA_87,
+        SuiteId.SLH_DSA_SHAKE_128S,
+        SuiteId.SLH_DSA_SHAKE_192S,
+        SuiteId.SLH_DSA_SHAKE_256S,
+      ];
+      const message = textBytes('malformed-verification-input-check');
+
+      for (const suiteId of pqSuites) {
+        const { signer } = getSuite(suiteId);
+        const signature = new Uint8Array(signer.lengths.signature);
+        const publicKey = new Uint8Array(signer.lengths.publicKey);
+        const contextBytes = buildContextBytes();
+
+        const wrongSignatureLength = verifyBytes({
+          suiteId,
+          message,
+          signature: new Uint8Array(signature.length - 1),
+          publicKey,
+          contextBytes,
+        });
+        const wrongPublicKeyLength = verifyBytes({
+          suiteId,
+          message,
+          signature,
+          publicKey: new Uint8Array(publicKey.length - 1),
+          contextBytes,
+        });
+        const oversizedContext = verifyBytes({
+          suiteId,
+          message,
+          signature,
+          publicKey,
+          contextBytes: new Uint8Array(MAX_CONTEXT_BYTES + 1),
+        });
+
+        if (wrongSignatureLength !== false || wrongPublicKeyLength !== false || oversizedContext !== false) {
+          throw new Error(`malformed verification input did not return false for suite ${suiteId}`);
+        }
+      }
+
+      const mlSuite = getSuite(SuiteId.ML_DSA_44);
+      const malformedType = verifyBytes({
+        suiteId: SuiteId.ML_DSA_44,
+        message,
+        signature: null,
+        publicKey: new Uint8Array(mlSuite.signer.lengths.publicKey),
+        contextBytes: buildContextBytes(),
+      });
+      const malformedPublicKeyType = verifyBytes({
+        suiteId: SuiteId.ML_DSA_44,
+        message,
+        signature: new Uint8Array(mlSuite.signer.lengths.signature),
+        publicKey: null,
+        contextBytes: buildContextBytes(),
+      });
+      const malformedContextType = verifyBytes({
+        suiteId: SuiteId.ML_DSA_44,
+        message,
+        signature: new Uint8Array(mlSuite.signer.lengths.signature),
+        publicKey: new Uint8Array(mlSuite.signer.lengths.publicKey),
+        contextBytes: 'not-bytes',
+      });
+      if (malformedType !== false || malformedPublicKeyType !== false || malformedContextType !== false) {
+        throw new Error('non-byte verification input did not return false');
+      }
+
+      let unsupportedProfileRejected = false;
+      try {
+        verifyBytes({
+          suiteId: SuiteId.ML_DSA_44,
+          signatureProfileId: 0xff,
+          message,
+          signature: new Uint8Array(mlSuite.signer.lengths.signature - 1),
+          publicKey: new Uint8Array(mlSuite.signer.lengths.publicKey),
+          contextBytes: buildContextBytes(),
+        });
+      } catch (err) {
+        unsupportedProfileRejected = err?.code === 'E_FORMAT_VERSION';
+      }
+      if (!unsupportedProfileRejected) {
+        throw new Error('unsupported signature profile was not rejected');
       }
     },
   });
@@ -1135,6 +1604,29 @@ function buildCases(suites) {
 
       if (!sameSuite || !samePublic) {
         throw new Error('exported secret key did not round-trip to stored public key');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'private-key import PCT must accept a valid expanded ML-DSA key',
+    fn: async () => {
+      const keys = generateKeypair(SuiteId.ML_DSA_44);
+      const secretKeyFile = packSecretKey({ suiteId: SuiteId.ML_DSA_44, keyBytes: keys.secretKey });
+      const manager = createSecretSessionManager();
+      let importedPublic;
+      try {
+        const imported = manager.importSecretKeyFile(secretKeyFile);
+        importedPublic = unpackPublicKey(imported.publicKeyFile);
+        if (bytesToHexLower(importedPublic.keyBytes) !== bytesToHexLower(keys.publicKey)) {
+          throw new Error('import PCT returned an unexpected ML-DSA public key');
+        }
+      } finally {
+        manager.clearAllSessions();
+        wipeBytes(importedPublic?.keyBytes);
+        wipeBytes(secretKeyFile);
+        wipeBytes(keys.secretKey);
+        wipeBytes(keys.publicKey);
       }
     },
   });
@@ -1254,33 +1746,57 @@ function buildCases(suites) {
   });
 
   cases.push({
-    name: 'post-sign self-verification must reject an inconsistent expanded ML-DSA key',
+    name: 'private-key import PCT must reject an inconsistent expanded ML-DSA key',
     fn: async () => {
       const keys = generateKeypair(SuiteId.ML_DSA_44);
       const corruptedSecret = Uint8Array.from(keys.secretKey);
       corruptedSecret[64] ^= 0x01;
-      const reconstructedPublic = getPublicKeyFromSecret(SuiteId.ML_DSA_44, corruptedSecret);
+      const secretKeyFile = packSecretKey({ suiteId: SuiteId.ML_DSA_44, keyBytes: corruptedSecret });
+      const manager = createSecretSessionManager();
       let rejected = false;
       try {
-        signBytesVerified({
-          suiteId: SuiteId.ML_DSA_44,
-          message: textBytes('private-key-consistency-check'),
-          secretKey: corruptedSecret,
-          publicKey: reconstructedPublic,
-          hedged: true,
-          contextBytes: buildContextBytes(),
-        });
+        manager.importSecretKeyFile(secretKeyFile);
       } catch (err) {
-        rejected = err?.code === 'E_SIGN_SELF_VERIFY';
+        rejected = err?.code === ErrorCode.E_KEY_CONSISTENCY;
       } finally {
+        manager.clearAllSessions();
+        wipeBytes(secretKeyFile);
         wipeBytes(corruptedSecret);
-        wipeBytes(reconstructedPublic);
         wipeBytes(keys.secretKey);
         wipeBytes(keys.publicKey);
       }
-      if (!rejected) throw new Error('inconsistent expanded ML-DSA key was not rejected after signing');
+      if (!rejected) throw new Error('inconsistent expanded ML-DSA key was not rejected during import');
     },
   });
+
+  if (suites.includes(SuiteId.SLH_DSA_SHAKE_128S)) {
+    cases.push({
+      name: 'private-key import PCT must reject an inconsistent expanded SLH-DSA key',
+      fn: async () => {
+        const keys = generateKeypair(SuiteId.SLH_DSA_SHAKE_128S);
+        const corruptedSecret = Uint8Array.from(keys.secretKey);
+        corruptedSecret[corruptedSecret.length - 1] ^= 0x01;
+        const secretKeyFile = packSecretKey({
+          suiteId: SuiteId.SLH_DSA_SHAKE_128S,
+          keyBytes: corruptedSecret,
+        });
+        const manager = createSecretSessionManager();
+        let rejected = false;
+        try {
+          manager.importSecretKeyFile(secretKeyFile);
+        } catch (err) {
+          rejected = err?.code === ErrorCode.E_KEY_CONSISTENCY;
+        } finally {
+          manager.clearAllSessions();
+          wipeBytes(secretKeyFile);
+          wipeBytes(corruptedSecret);
+          wipeBytes(keys.secretKey);
+          wipeBytes(keys.publicKey);
+        }
+        if (!rejected) throw new Error('inconsistent expanded SLH-DSA key was not rejected during import');
+      },
+    });
+  }
 
   cases.push({
     name: 'strict UTF-8 input encoding must reject unpaired surrogates',

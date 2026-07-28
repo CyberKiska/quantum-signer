@@ -78,15 +78,15 @@ function verifyWithCandidate(parsedSig, candidate) {
 
 function mismatchWarning(loadedValid, embeddedValid) {
   if (loadedValid && embeddedValid) {
-    return 'Loaded public key differs from embedded key, but both verify. Use trusted key identity for final trust decision.';
+    return 'Loaded and embedded public keys differ even though both verify. The container fails signer-binding policy.';
   }
   if (loadedValid && !embeddedValid) {
-    return 'Loaded public key verifies, embedded key does not. Signature metadata key may be stale or modified.';
+    return 'Loaded public key verifies, but the authenticated embedded signer key does not. The container fails signer-binding policy.';
   }
   if (!loadedValid && embeddedValid) {
-    return 'Loaded public key fails, embedded key verifies. You may have loaded the wrong public key.';
+    return 'Embedded signer key verifies, but the loaded public key is different and fails. The container fails the selected-key policy.';
   }
-  return 'Loaded and embedded keys both fail verification.';
+  return 'Loaded and embedded public keys differ and both fail verification.';
 }
 
 export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
@@ -121,10 +121,10 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     else if (embeddedResult.valid) verifiedKeySource = 'signature';
 
     return {
-      valid: loadedResult.valid,
+      valid: false,
       cryptoValid,
-      trusted: loadedResult.valid,
-      code: loadedResult.valid ? null : ErrorCode.E_SIGNATURE_INVALID,
+      trusted: false,
+      code: ErrorCode.E_SIGNER_BINDING_MISMATCH,
       ...hashDetails,
       suiteId: parsedSig.suiteId,
       hashAlgId: parsedSig.hashAlgId,
@@ -191,5 +191,44 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
       result.keySource === 'signature'
         ? 'Verified using public key embedded in .qsig. For identity assurance, compare with a trusted key in Keys tab.'
         : null,
+  };
+}
+
+/**
+ * Combines detached-payload matching with container signature policy.
+ *
+ * The signature is always evaluated before the payload comparison is reported.
+ * This keeps unverified container fields from being presented as signed data and
+ * preserves the distinction between primitive verification and final policy.
+ */
+export function finalizePayloadVerification(parsedSig, publicKeyFile, hashDetails) {
+  const actualHashHex = hashDetails?.computedHashHex || hashDetails?.providedHashHex || null;
+  if (typeof actualHashHex !== 'string') {
+    throw new TypeError('hashDetails must include computedHashHex or providedHashHex');
+  }
+
+  const declaredHashHex = bytesToHexLower(parsedSig.fileHash);
+  const signatureResult = finalizeVerification(parsedSig, publicKeyFile, hashDetails);
+  const signaturePolicyValid = signatureResult.valid === true;
+  const payloadMatches = actualHashHex === declaredHashHex;
+  const valid = signaturePolicyValid && payloadMatches;
+
+  return {
+    ...signatureResult,
+    valid,
+    trusted: valid && signatureResult.trusted === true,
+    code:
+      signaturePolicyValid && !payloadMatches
+        ? ErrorCode.E_FILE_HASH_MISMATCH
+        : signatureResult.code,
+    signatureEvaluated: true,
+    signaturePolicyValid,
+    payloadMatches,
+    declaredHashHex,
+    signedHashHex: signaturePolicyValid ? declaredHashHex : null,
+    warning:
+      signaturePolicyValid && !payloadMatches
+        ? 'The signature is valid for the digest declared in .qsig, but that digest does not match the provided payload.'
+        : signatureResult.warning,
   };
 }
