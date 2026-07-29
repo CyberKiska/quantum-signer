@@ -133,6 +133,7 @@ function testInvalidExportConsentDoesNotRefreshIdleDeadline() {
   const summary = manager.generateSession(SuiteId.ML_DSA_44);
 
   scheduler.advance(900);
+  const authorization = manager.authorizeSecretKeyExport(summary.sessionHandle);
   let rejected = false;
   try {
     manager.exportSecretKeyFile(summary.sessionHandle, 'wrong-export-consent');
@@ -143,6 +144,53 @@ function testInvalidExportConsentDoesNotRefreshIdleDeadline() {
 
   scheduler.advance(100);
   assert(!manager.hasSession(summary.sessionHandle), 'invalid export attempt extended the idle deadline');
+  assert(typeof authorization.exportConsentToken === 'string', 'export authorization did not issue a token');
+}
+
+function testExportAuthorizationIsExpiringAndOneTime() {
+  const scheduler = createFakeScheduler();
+  const manager = createTestManager(scheduler, 10_000, { exportAuthorizationTtlMs: 100 });
+  const summary = manager.generateSession(SuiteId.ML_DSA_44);
+
+  const firstGrant = manager.authorizeSecretKeyExport(summary.sessionHandle);
+  const exported = manager.exportSecretKeyFile(summary.sessionHandle, firstGrant.exportConsentToken);
+  assert(exported instanceof Uint8Array && exported.length > 0, 'authorized secret export failed');
+
+  let replayRejected = false;
+  try {
+    manager.exportSecretKeyFile(summary.sessionHandle, firstGrant.exportConsentToken);
+  } catch (err) {
+    replayRejected = err?.code === 'E_EXPORT_AUTH';
+  }
+  assert(replayRejected, 'one-time export authorization was replayable');
+
+  const expiringGrant = manager.authorizeSecretKeyExport(summary.sessionHandle);
+  scheduler.advance(100);
+  let expiredRejected = false;
+  try {
+    manager.exportSecretKeyFile(summary.sessionHandle, expiringGrant.exportConsentToken);
+  } catch (err) {
+    expiredRejected = err?.code === 'E_EXPORT_AUTH' && err?.details?.reason === 'expired';
+  }
+  assert(expiredRejected, 'expired export authorization was accepted');
+}
+
+function testSessionCapacityIsBounded() {
+  const scheduler = createFakeScheduler();
+  const manager = createTestManager(scheduler, 10_000, { maxSessions: 2 });
+  const first = manager.generateSession(SuiteId.ML_DSA_44);
+  manager.generateSession(SuiteId.ML_DSA_44);
+
+  let limited = false;
+  try {
+    manager.generateSession(SuiteId.ML_DSA_44);
+  } catch (err) {
+    limited = err?.code === 'E_SESSION_LIMIT' && err?.details?.maxSessions === 2;
+  }
+  assert(limited, 'secret-session manager exceeded its configured capacity');
+
+  manager.clearSession(first.sessionHandle);
+  manager.generateSession(SuiteId.ML_DSA_44);
 }
 
 function testHasSessionEnforcesDelayedDeadlineWithoutTouching() {
@@ -167,5 +215,7 @@ testActivityExtendsExpiry();
 testExpiryDefersWipeDuringLease();
 testLateAccessCannotReviveExpiredSession();
 testInvalidExportConsentDoesNotRefreshIdleDeadline();
+testExportAuthorizationIsExpiringAndOneTime();
+testSessionCapacityIsBounded();
 testHasSessionEnforcesDelayedDeadlineWithoutTouching();
 console.log('Secret-session lifecycle tests: PASS');

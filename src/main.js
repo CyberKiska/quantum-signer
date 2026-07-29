@@ -24,7 +24,13 @@ import { setupKeysTab } from './ui/keys.js';
 import { setupSignTab } from './ui/sign.js';
 import { setupVerifyTab } from './ui/verify.js';
 
+const deploymentAllowsPrivateKeys =
+  document.querySelector('meta[name="private-key-operations"]')?.content === 'enabled';
+
 const state = {
+  deliveryIsolated: globalThis.crossOriginIsolated === true,
+  privateKeyOperationsAllowed:
+    deploymentAllowsPrivateKeys && globalThis.crossOriginIsolated === true,
   keys: {
     public: null,
     secret: null,
@@ -40,6 +46,9 @@ function wipeStateBytes(appState) {
   if (pub?.keyBytes) wipeBytes(pub.keyBytes);
   if (pub?.fileBytes) wipeBytes(pub.fileBytes);
   if (appState.sign.lastSignature?.bytes) wipeBytes(appState.sign.lastSignature.bytes);
+  appState.keys.public = null;
+  appState.keys.secret = null;
+  appState.sign.lastSignature = null;
 }
 
 function enforceTopLevelBrowsingContext() {
@@ -81,6 +90,17 @@ async function main() {
   setupSignTab(state, workerClient);
   setupVerifyTab(state, workerClient);
 
+  const deliveryWarning = byId('delivery-warning');
+  deliveryWarning.classList.toggle('hidden', state.privateKeyOperationsAllowed);
+  if (!state.privateKeyOperationsAllowed) {
+    showToast(
+      'warning',
+      deploymentAllowsPrivateKeys
+        ? 'Expected isolation headers are missing. Private-key operations are disabled.'
+        : 'This public demo is verification-only. Private-key operations are disabled.'
+    );
+  }
+
   const selfTestBtn = byId('sidebar-selftest');
 
   selfTestBtn.addEventListener('click', async () => {
@@ -108,9 +128,19 @@ async function main() {
     }
   });
 
-  window.addEventListener('beforeunload', () => {
+  let tornDown = false;
+  const teardown = () => {
+    if (tornDown) return;
+    tornDown = true;
     wipeStateBytes(state);
     workerClient.destroy();
+  };
+  window.addEventListener('pagehide', teardown, { once: true });
+  window.addEventListener('beforeunload', teardown, { once: true });
+  window.addEventListener('pageshow', (event) => {
+    // A page placed into the back/forward cache has already destroyed its
+    // key-holding worker. Reload instead of restoring stale session handles.
+    if (event.persisted) window.location.reload();
   });
 }
 

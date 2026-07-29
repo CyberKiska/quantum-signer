@@ -20,6 +20,8 @@ function cloneBytes(bytes) {
 }
 
 export const DEFAULT_SECRET_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+export const DEFAULT_EXPORT_AUTHORIZATION_TTL_MS = 60 * 1000;
+export const DEFAULT_MAX_SECRET_SESSIONS = 2;
 
 function monotonicNow() {
   if (typeof globalThis.performance?.now === 'function') return globalThis.performance.now();
@@ -74,13 +76,13 @@ function randomOpaqueId(prefix) {
   const bytes = new Uint8Array(16);
   globalThis.crypto.getRandomValues(bytes);
   const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  wipeBytes(bytes);
   return `${prefix}-${hex}`;
 }
 
 function buildSessionSummary(handle, session) {
   return {
     sessionHandle: handle,
-    exportConsentToken: session.exportConsentToken,
     suiteId: session.suiteId,
     publicKeyLength: session.publicKey.length,
     secretKeyLength: session.secretKey.length,
@@ -95,6 +97,8 @@ function buildSessionSummary(handle, session) {
 
 export function createSecretSessionManager({
   idleTimeoutMs = DEFAULT_SECRET_SESSION_IDLE_TIMEOUT_MS,
+  exportAuthorizationTtlMs = DEFAULT_EXPORT_AUTHORIZATION_TTL_MS,
+  maxSessions = DEFAULT_MAX_SECRET_SESSIONS,
   now = monotonicNow,
   setTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
   clearTimer = (timer) => globalThis.clearTimeout(timer),
@@ -102,6 +106,19 @@ export function createSecretSessionManager({
 } = {}) {
   if (!Number.isInteger(idleTimeoutMs) || idleTimeoutMs <= 0 || idleTimeoutMs > 0x7fffffff) {
     throw createError(ErrorCode.E_INTERNAL, { reason: 'invalid_secret_session_idle_timeout', idleTimeoutMs });
+  }
+  if (
+    !Number.isInteger(exportAuthorizationTtlMs) ||
+    exportAuthorizationTtlMs <= 0 ||
+    exportAuthorizationTtlMs > 0x7fffffff
+  ) {
+    throw createError(ErrorCode.E_INTERNAL, {
+      reason: 'invalid_export_authorization_ttl',
+      exportAuthorizationTtlMs,
+    });
+  }
+  if (!Number.isInteger(maxSessions) || maxSessions <= 0 || maxSessions > 16) {
+    throw createError(ErrorCode.E_INTERNAL, { reason: 'invalid_secret_session_limit', maxSessions });
   }
   if (
     typeof now !== 'function' ||
@@ -132,6 +149,7 @@ export function createSecretSessionManager({
     if (session.wiped) return;
     cancelExpiry(session);
     session.wiped = true;
+    session.exportAuthorization = null;
     wipeBytes(session.secretKey);
     wipeBytes(session.publicKey);
   }
@@ -179,7 +197,14 @@ export function createSecretSessionManager({
     scheduleExpiry(handle, session);
   }
 
+  function assertSessionCapacity() {
+    if (sessions.size >= maxSessions) {
+      throw createError(ErrorCode.E_SESSION_LIMIT, { maxSessions });
+    }
+  }
+
   function createSession({ suiteId, secretKey, publicKey }) {
+    assertSessionCapacity();
     assertKeyLength(suiteId, secretKey, 'secret');
     const sessionSecretKey = cloneBytes(secretKey);
     const sessionPublicKey = publicKey ? cloneBytes(publicKey) : getPublicKeyFromSecret(suiteId, sessionSecretKey);
@@ -195,7 +220,7 @@ export function createSecretSessionManager({
       wiped: false,
       lastActivityAt: readNow(),
       expiryTimer: null,
-      exportConsentToken: randomOpaqueId('export-consent'),
+      exportAuthorization: null,
       fingerprintShort: computeFingerprint(sessionPublicKey, 8),
       fingerprintHex: computeFingerprintHex(sessionPublicKey),
     };
@@ -261,6 +286,7 @@ export function createSecretSessionManager({
 
   return {
     generateSession(suiteId) {
+      assertSessionCapacity();
       const keys = generateKeypair(suiteId);
       try {
         return createSession({
@@ -275,6 +301,7 @@ export function createSecretSessionManager({
     },
 
     importSecretKeyFile(secretKeyFile) {
+      assertSessionCapacity();
       assertBytesLimit(secretKeyFile, MAX_KEY_FILE_BYTES, 'secretKeyFile');
       const parsedSecret = unpackSecretKey(secretKeyFile);
       let verifiedPublicKey;
@@ -291,15 +318,34 @@ export function createSecretSessionManager({
       }
     },
 
+    authorizeSecretKeyExport(handle) {
+      const session = requireSession(handle, { touch: false });
+      const exportConsentToken = randomOpaqueId('export-consent');
+      session.exportAuthorization = {
+        token: exportConsentToken,
+        expiresAt: readNow() + exportAuthorizationTtlMs,
+      };
+      return {
+        exportConsentToken,
+        expiresInMs: exportAuthorizationTtlMs,
+      };
+    },
+
     exportSecretKeyFile(handle, exportConsentToken) {
       const session = requireSession(handle, { touch: false });
+      const authorization = session.exportAuthorization;
+      // Consume every grant on its first use attempt. This makes export
+      // authorization short-lived and non-replayable even after a bad token.
+      session.exportAuthorization = null;
       if (typeof exportConsentToken !== 'string' || exportConsentToken.length === 0) {
         throw createError(ErrorCode.E_EXPORT_AUTH, { field: 'exportConsentToken', reason: 'missing' });
       }
-      if (session.exportConsentToken !== exportConsentToken) {
-        throw createError(ErrorCode.E_EXPORT_AUTH, { field: 'exportConsentToken', reason: 'mismatch', handle });
+      if (!authorization || authorization.token !== exportConsentToken) {
+        throw createError(ErrorCode.E_EXPORT_AUTH, { field: 'exportConsentToken', reason: 'mismatch' });
       }
-      touchSession(handle, session);
+      if (readNow() >= authorization.expiresAt) {
+        throw createError(ErrorCode.E_EXPORT_AUTH, { field: 'exportConsentToken', reason: 'expired' });
+      }
       return packSecretKey({
         suiteId: session.suiteId,
         keyBytes: session.secretKey,

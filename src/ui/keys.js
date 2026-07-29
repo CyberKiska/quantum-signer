@@ -27,7 +27,6 @@ const KEYGEN_TIMEOUT_MS = Object.freeze({
   SLH_DSA: 300_000,
 });
 const SECRET_SESSION_TIMEOUT_MS = 360_000;
-const secretExportConsentTokens = new Map();
 
 const SLH_WARNING_TEXT = 'SLH-DSA generation is computationally intensive. It may take several minutes on mobile devices.';
 const FALCON_WARNING_TEXT = 'Experimental: Falcon support uses Round 3 padded signatures, not FN-DSA / FIPS-206, and may be incompatible with final FN-DSA.';
@@ -59,7 +58,9 @@ function formatKeyInfo(state) {
 }
 
 function notifyKeysUpdated(state) {
-  window.dispatchEvent(new CustomEvent('keys:updated', { detail: state.keys }));
+  // Subscribers already close over the shared application state. Do not also
+  // broadcast the live key object and worker session handle on a DOM event.
+  window.dispatchEvent(new Event('keys:updated'));
 }
 
 function wipePublicEntry(entry, { wipeContainer = false } = {}) {
@@ -94,16 +95,6 @@ function createSecretSessionEntry(result, { exported = true } = {}) {
   };
 }
 
-function rememberExportConsent(result) {
-  if (typeof result?.sessionHandle !== 'string' || typeof result?.exportConsentToken !== 'string') return;
-  secretExportConsentTokens.set(result.sessionHandle, result.exportConsentToken);
-}
-
-function forgetExportConsent(sessionHandle) {
-  if (typeof sessionHandle !== 'string' || sessionHandle.length === 0) return;
-  secretExportConsentTokens.delete(sessionHandle);
-}
-
 function setPublicKey(state, parsed, options = {}) {
   wipePublicEntry(state.keys.public, { wipeContainer: true });
   state.keys.public = createPublicEntry(parsed, options);
@@ -135,12 +126,9 @@ async function replaceSecretSession(state, workerClient, result, options = {}) {
   try {
     if (previousHandle && previousHandle !== result.sessionHandle) {
       await clearSecretSession(workerClient, previousHandle);
-      forgetExportConsent(previousHandle);
     }
     applySecretSessionIdentity(state, result, options);
-    rememberExportConsent(result);
   } catch (err) {
-    forgetExportConsent(result.sessionHandle);
     try {
       await clearSecretSession(workerClient, result.sessionHandle);
     } catch (_cleanupErr) {
@@ -168,6 +156,7 @@ export function populateSuiteSelect(selectEl, suites, defaultSuiteId) {
 }
 
 export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
+  const privateKeyOperationsAllowed = state.privateKeyOperationsAllowed === true;
   const suiteSelect = byId('keys-suite');
   const suiteWarningEl = byId('keys-suite-warning');
   const generateBtn = byId('keys-generate');
@@ -213,15 +202,16 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
 
   function updateExportButtons() {
     exportPublicBtn.disabled = keyOperationBusy || state.keys.transitioning || !state.keys.public;
-    exportSecretBtn.disabled = keyOperationBusy || state.keys.transitioning || !state.keys.secret;
+    exportSecretBtn.disabled =
+      !privateKeyOperationsAllowed || keyOperationBusy || state.keys.transitioning || !state.keys.secret;
   }
 
   function setKeyOperationBusy(busy) {
     keyOperationBusy = busy;
-    generateBtn.disabled = busy;
+    generateBtn.disabled = busy || !privateKeyOperationsAllowed;
     suiteSelect.disabled = busy;
     importPublicInput.disabled = busy;
-    importSecretInput.disabled = busy;
+    importSecretInput.disabled = busy || !privateKeyOperationsAllowed;
     clearBtn.disabled = busy;
     updateExportButtons();
   }
@@ -247,12 +237,9 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   workerClient.onSecretSessionInvalidated(({ reason, sessionHandle }) => {
     const activeHandle = state.keys.secret?.sessionHandle || null;
     if (sessionHandle && activeHandle !== sessionHandle) {
-      forgetExportConsent(sessionHandle);
       return;
     }
 
-    if (sessionHandle) forgetExportConsent(sessionHandle);
-    else secretExportConsentTokens.clear();
     if (!state.keys.secret) return;
 
     state.keys.secret = null;
@@ -271,6 +258,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   suiteSelect.addEventListener('change', refreshSuiteWarning);
 
   generateBtn.addEventListener('click', async () => {
+    if (!privateKeyOperationsAllowed) return;
     if (keyOperationBusy) return;
     if (state.keys.secret && !confirm('A private key is already loaded. Generating a new one will overwrite it. Continue?')) {
       return;
@@ -336,6 +324,10 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   });
 
   importSecretInput.addEventListener('change', async () => {
+    if (!privateKeyOperationsAllowed) {
+      importSecretInput.value = '';
+      return;
+    }
     if (keyOperationBusy) return;
     if (state.keys.secret && !confirm('A private key is already loaded. Importing a new one will overwrite it. Continue?')) {
       importSecretInput.value = '';
@@ -387,6 +379,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   });
 
   exportSecretBtn.addEventListener('click', async () => {
+    if (!privateKeyOperationsAllowed) return;
     if (keyOperationBusy) return;
     if (!state.keys.secret) return;
     if (
@@ -400,15 +393,16 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     const exportingSession = state.keys.secret;
     try {
       setKeyOperationBusy(true);
-      const exportConsentToken = secretExportConsentTokens.get(exportingSession.sessionHandle);
-      if (typeof exportConsentToken !== 'string' || exportConsentToken.length === 0) {
-        throw new Error('Private key export authorization is unavailable. Re-import or regenerate the private-key session.');
-      }
+      const authorization = await workerClient.call(
+        'AUTHORIZE_SECRET_EXPORT',
+        { secretSessionHandle: exportingSession.sessionHandle },
+        { timeoutMs: SECRET_SESSION_TIMEOUT_MS }
+      );
       const result = await workerClient.call(
         'EXPORT_SECRET',
         {
           secretSessionHandle: exportingSession.sessionHandle,
-          exportConsentToken,
+          exportConsentToken: authorization.exportConsentToken,
         },
         { timeoutMs: SECRET_SESSION_TIMEOUT_MS }
       );
@@ -460,7 +454,6 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     try {
       if (state.keys.secret?.sessionHandle) {
         await clearSecretSession(workerClient, state.keys.secret.sessionHandle);
-        forgetExportConsent(state.keys.secret.sessionHandle);
       }
       wipePublicEntry(state.keys.public, { wipeContainer: true });
       state.keys.public = null;

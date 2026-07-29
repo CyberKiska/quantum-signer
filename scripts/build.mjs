@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { buildStaticHeadersFile } from './security-headers.mjs';
+import { buildStaticHeadersFile, META_DOCUMENT_CSP } from './security-headers.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,11 +16,18 @@ function normalizeBasePath(value) {
   return out;
 }
 
+function normalizePrivateKeyOperations(value) {
+  if (value === undefined || value === null || value === '') return 'enabled';
+  if (value === 'enabled' || value === 'disabled') return value;
+  throw new Error('PRIVATE_KEY_OPERATIONS must be exactly "enabled" or "disabled"');
+}
+
 export async function buildProject({ minify = true, sourcemap = !minify } = {}) {
   const distDir = path.join(root, 'dist');
   const assetsDir = path.join(distDir, 'assets');
   const srcDir = path.join(root, 'src');
   const basePath = normalizeBasePath(process.env.BASE_PATH || '/');
+  const privateKeyOperations = normalizePrivateKeyOperations(process.env.PRIVATE_KEY_OPERATIONS);
 
   await rm(distDir, { recursive: true, force: true });
   await mkdir(assetsDir, { recursive: true });
@@ -45,7 +52,10 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
     readFile(path.join(srcDir, 'styles.css'), 'utf8'),
   ]);
 
-  const html = htmlTemplate.replaceAll('%BASE_PATH%', basePath);
+  const html = htmlTemplate
+    .replaceAll('%BASE_PATH%', basePath)
+    .replaceAll('%DOCUMENT_CSP%', META_DOCUMENT_CSP)
+    .replaceAll('%PRIVATE_KEY_OPERATIONS%', privateKeyOperations);
   const staticHeaders = buildStaticHeadersFile(basePath);
 
   await Promise.all([

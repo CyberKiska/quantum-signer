@@ -57,6 +57,17 @@ body {
   background: var(--bg-app);
 }
 
+.delivery-warning {
+  margin: 0 0 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #f59e0b;
+  border-radius: var(--radius-md);
+  color: #78350f;
+  background: #fffbeb;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
 .tab-panel {
   display: none;
 }

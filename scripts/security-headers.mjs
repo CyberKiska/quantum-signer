@@ -15,6 +15,13 @@ export const DOCUMENT_CSP = [
   "worker-src 'self'",
 ].join('; ');
 
+// frame-ancestors is intentionally omitted from the meta policy because
+// browsers ignore that directive in <meta http-equiv>. The response header
+// remains authoritative and carries the complete DOCUMENT_CSP.
+export const META_DOCUMENT_CSP = DOCUMENT_CSP.split('; ')
+  .filter((directive) => !directive.startsWith('frame-ancestors '))
+  .join('; ');
+
 export const WORKER_CSP = [
   "default-src 'none'",
   "base-uri 'none'",

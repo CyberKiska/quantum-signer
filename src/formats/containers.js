@@ -1,6 +1,6 @@
 import { sha3_256 } from '@noble/hashes/sha3.js';
 import { ErrorCode, createError } from '../crypto/errors.js';
-import { equalsBytes } from '../crypto/bytes.js';
+import { equalsBytes, wipeBytes } from '../crypto/bytes.js';
 import { normalizeCanonicalUtcIso8601 } from '../crypto/time.js';
 import { SuiteId, getSuiteWireLengths } from '../crypto/suite-metadata.js';
 import {
@@ -957,25 +957,22 @@ function buildKeyFile({ magic, suiteId, keyBytes, versionMajor, versionMinor }) 
   ensureU32(keyBytes.length, 'keyLen');
 
   const headerLen = 4 + 1 + 1 + 1 + 1 + 4;
-  const withoutCrc = new Uint8Array(headerLen + keyBytes.length);
-  const view = new DataView(withoutCrc.buffer);
+  const out = new Uint8Array(headerLen + keyBytes.length + 4);
+  assertMaxLength(out.length, MAX_KEY_FILE_BYTES, 'keyFileLen', ErrorCode.E_FORMAT_LENGTH);
+  const view = new DataView(out.buffer);
 
   let o = 0;
-  withoutCrc.set(magic, o);
+  out.set(magic, o);
   o += 4;
-  withoutCrc[o++] = versionMajor;
-  withoutCrc[o++] = versionMinor;
-  withoutCrc[o++] = suiteId;
-  withoutCrc[o++] = 0;
+  out[o++] = versionMajor;
+  out[o++] = versionMinor;
+  out[o++] = suiteId;
+  out[o++] = 0;
   view.setUint32(o, keyBytes.length, true);
   o += 4;
-  withoutCrc.set(keyBytes, o);
-
-  const crc = crc32(withoutCrc);
-  const out = new Uint8Array(withoutCrc.length + 4);
-  assertMaxLength(out.length, MAX_KEY_FILE_BYTES, 'keyFileLen', ErrorCode.E_FORMAT_LENGTH);
-  out.set(withoutCrc, 0);
-  new DataView(out.buffer).setUint32(withoutCrc.length, crc, true);
+  out.set(keyBytes, o);
+  o += keyBytes.length;
+  view.setUint32(o, crc32(out.subarray(0, o)), true);
   return out;
 }
 
@@ -988,65 +985,69 @@ function parseKeyFile(bytes, expectedMagic) {
   }
 
   const reader = new Reader(bytes);
-  const magic = reader.take(4, ErrorCode.E_FORMAT_MAGIC);
-  if (!equalsBytes(magic, expectedMagic)) {
-    throw createError(ErrorCode.E_FORMAT_MAGIC);
-  }
+  const sensitive = equalsBytes(expectedMagic, MAGIC_PQSK);
+  try {
+    const magic = reader.take(4, ErrorCode.E_FORMAT_MAGIC);
+    if (!equalsBytes(magic, expectedMagic)) {
+      throw createError(ErrorCode.E_FORMAT_MAGIC);
+    }
 
-  const versionMajor = reader.u8(ErrorCode.E_FORMAT_VERSION);
-  const versionMinor = reader.u8(ErrorCode.E_FORMAT_VERSION);
-  if (versionMajor !== KEY_FORMAT_VERSION_MAJOR) {
-    throw createError(ErrorCode.E_FORMAT_VERSION, { versionMajor, expectedMajor: KEY_FORMAT_VERSION_MAJOR });
-  }
-  if (versionMinor > KEY_FORMAT_VERSION_MINOR) {
-    throw createError(ErrorCode.E_FORMAT_VERSION, {
-      field: 'versionMinor',
+    const versionMajor = reader.u8(ErrorCode.E_FORMAT_VERSION);
+    const versionMinor = reader.u8(ErrorCode.E_FORMAT_VERSION);
+    if (versionMajor !== KEY_FORMAT_VERSION_MAJOR) {
+      throw createError(ErrorCode.E_FORMAT_VERSION, { versionMajor, expectedMajor: KEY_FORMAT_VERSION_MAJOR });
+    }
+    if (versionMinor > KEY_FORMAT_VERSION_MINOR) {
+      throw createError(ErrorCode.E_FORMAT_VERSION, {
+        field: 'versionMinor',
+        versionMinor,
+        maxSupportedMinor: KEY_FORMAT_VERSION_MINOR,
+      });
+    }
+
+    const suiteId = reader.u8(ErrorCode.E_SUITE_UNSUPPORTED);
+    ensureSuiteIdSupported(suiteId);
+
+    const flags = reader.u8(ErrorCode.E_FORMAT_FLAGS);
+    if (flags !== 0) {
+      throw createError(ErrorCode.E_FORMAT_FLAGS, { flags });
+    }
+
+    const keyLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
+    const wireLengths = getSuiteWireLengths(suiteId);
+    const expectedKeyLength = sensitive ? wireLengths.secretKey : wireLengths.publicKey;
+    if (keyLen !== expectedKeyLength) {
+      throw createError(ErrorCode.E_FORMAT_LENGTH, {
+        field: 'keyLen',
+        expected: expectedKeyLength,
+        actual: keyLen,
+        suiteId,
+      });
+    }
+    assertMaxLength(keyLen, MAX_KEY_BYTES, 'keyLen', ErrorCode.E_FORMAT_LENGTH);
+    const expectedTotal = 4 + 1 + 1 + 1 + 1 + 4 + keyLen + 4;
+    if (bytes.length !== expectedTotal) {
+      throw createError(ErrorCode.E_FORMAT_LENGTH, { expectedTotal, actual: bytes.length });
+    }
+
+    const keyBytes = reader.take(keyLen, ErrorCode.E_FORMAT_LENGTH);
+    const crcRead = reader.u32(ErrorCode.E_FORMAT_CRC32);
+    const crcExpected = crc32(reader.bytes.subarray(0, reader.bytes.length - 4));
+    if (crcRead !== crcExpected) {
+      wipeBytes(keyBytes);
+      throw createError(ErrorCode.E_FORMAT_CRC32, { expected: crcExpected, actual: crcRead });
+    }
+
+    return {
+      versionMajor,
       versionMinor,
-      maxSupportedMinor: KEY_FORMAT_VERSION_MINOR,
-    });
-  }
-
-  const suiteId = reader.u8(ErrorCode.E_SUITE_UNSUPPORTED);
-  ensureSuiteIdSupported(suiteId);
-
-  const flags = reader.u8(ErrorCode.E_FORMAT_FLAGS);
-  if (flags !== 0) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { flags });
-  }
-
-  const keyLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
-  const wireLengths = getSuiteWireLengths(suiteId);
-  const expectedKeyLength = equalsBytes(expectedMagic, MAGIC_PQPK) ? wireLengths.publicKey : wireLengths.secretKey;
-  if (keyLen !== expectedKeyLength) {
-    throw createError(ErrorCode.E_FORMAT_LENGTH, {
-      field: 'keyLen',
-      expected: expectedKeyLength,
-      actual: keyLen,
       suiteId,
-    });
+      keyBytes,
+      crc32: crcRead,
+    };
+  } finally {
+    if (sensitive) wipeBytes(reader.bytes);
   }
-  assertMaxLength(keyLen, MAX_KEY_BYTES, 'keyLen', ErrorCode.E_FORMAT_LENGTH);
-  const expectedTotal = 4 + 1 + 1 + 1 + 1 + 4 + keyLen + 4;
-  if (bytes.length !== expectedTotal) {
-    throw createError(ErrorCode.E_FORMAT_LENGTH, { expectedTotal, actual: bytes.length });
-  }
-
-  const keyBytes = reader.take(keyLen, ErrorCode.E_FORMAT_LENGTH);
-  const crcRead = reader.u32(ErrorCode.E_FORMAT_CRC32);
-
-  const crcInput = reader.bytes.subarray(0, reader.bytes.length - 4);
-  const crcExpected = crc32(crcInput);
-  if (crcRead !== crcExpected) {
-    throw createError(ErrorCode.E_FORMAT_CRC32, { expected: crcExpected, actual: crcRead });
-  }
-
-  return {
-    versionMajor,
-    versionMinor,
-    suiteId,
-    keyBytes,
-    crc32: crcRead,
-  };
 }
 
 export function packPublicKey({

@@ -49,6 +49,12 @@ export function setupLayout(state) {
       setContextTone(secKeyFpEl, 'muted');
     }
 
+    if (!state.privateKeyOperationsAllowed) {
+      statusDot.className = 'status-indicator danger';
+      statusText.textContent = state.deliveryIsolated ? 'Verify-Only Demo' : 'Headers Missing';
+      return;
+    }
+
     if (sec) {
       statusDot.className = 'status-indicator warning';
       statusText.textContent = 'Armed';

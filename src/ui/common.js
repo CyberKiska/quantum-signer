@@ -196,6 +196,7 @@ export function createWorkerClient(
   let destroyed = false;
   let seq = 0;
   const pending = new Map();
+  const abandonedSecretSessionRequests = new Set();
   const invalidationListeners = new Set();
   const defaultTimeoutMs = 60_000;
 
@@ -234,7 +235,26 @@ export function createWorkerClient(
     }
 
     const p = pending.get(msg.id);
-    if (!p) return;
+    if (!p) {
+      if (abandonedSecretSessionRequests.delete(msg.id) && msg.type === 'RESULT') {
+        const secretSessionHandle = msg.result?.sessionHandle;
+        if (typeof secretSessionHandle === 'string' && secretSessionHandle.length > 0) {
+          // KEYGEN/IMPORT_SECRET may finish after the UI gave up waiting. Clear
+          // the otherwise unreachable key immediately; its cleanup response is
+          // intentionally ignored.
+          try {
+            boundWorker.postMessage({
+              id: `orphan-cleanup-${Date.now()}-${seq++}`,
+              type: 'CLEAR_SECRET_SESSION',
+              payload: { secretSessionHandle },
+            });
+          } catch (_err) {
+            // A concurrent worker failure/termination releases the worker heap.
+          }
+        }
+      }
+      return;
+    }
 
     if (msg.type === 'PROGRESS') {
       if (typeof p.onProgress === 'function') p.onProgress(msg);
@@ -289,6 +309,7 @@ export function createWorkerClient(
     worker = null;
     if (previous) previous.terminate();
     rejectAllPending(reason);
+    abandonedSecretSessionRequests.clear();
     // Do not immediately construct another worker from an asynchronous error
     // callback. A broken URL, MIME type, CSP, or module would otherwise create
     // an unbounded crash/restart loop. The next explicit call makes one retry.
@@ -322,15 +343,19 @@ export function createWorkerClient(
         const p = pending.get(id);
         if (p) {
           pending.delete(id);
+          if (p.type === 'KEYGEN' || p.type === 'IMPORT_SECRET') {
+            abandonedSecretSessionRequests.add(id);
+          }
           reject(
             new Error(
-              `Operation timed out after ${timeoutMs}ms. The worker was left running to preserve any in-memory private key; wait for it to become responsive before retrying.`
+              `Operation timed out after ${timeoutMs}ms. The worker was left running; any late-created private-key session will be cleared automatically.`
             )
           );
         }
       }, timeoutMs);
 
       pending.set(id, {
+        type,
         resolve,
         reject,
         timer,
@@ -361,6 +386,7 @@ export function createWorkerClient(
     rejectAllPending('Cryptographic worker was terminated');
     if (worker) worker.terminate();
     worker = null;
+    abandonedSecretSessionRequests.clear();
     invalidationListeners.clear();
   }
 

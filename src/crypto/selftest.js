@@ -223,6 +223,143 @@ function buildCases(suites) {
   });
 
   cases.push({
+    name: 'chunked SHA3-512 file hashing must match one-shot hashing across sponge boundaries',
+    fn: async () => {
+      const payload = Uint8Array.from({ length: 1_129 }, (_value, index) => (index * 131 + 17) & 0xff);
+      const expected = hashBytesSHA3512(payload);
+      for (const chunkSize of [1, 2, 71, 72, 73, 135, 136, 137, 1_024, payload.length + 1]) {
+        const progress = [];
+        const actual = await hashFileSHA3512(new Blob([payload]), {
+          chunkSize,
+          onProgress: (loaded, total) => progress.push([loaded, total]),
+        });
+        if (!equalsBytes(actual, expected)) {
+          throw new Error(`streaming digest mismatch for chunk size ${chunkSize}`);
+        }
+        const expectedUpdates = Math.ceil(payload.length / chunkSize);
+        if (
+          progress.length !== expectedUpdates ||
+          progress.at(-1)?.[0] !== payload.length ||
+          progress.at(-1)?.[1] !== payload.length
+        ) {
+          throw new Error(`streaming progress invariant failed for chunk size ${chunkSize}`);
+        }
+      }
+
+      const emptyProgress = [];
+      const emptyDigest = await hashFileSHA3512(new Blob([]), {
+        chunkSize: 1,
+        onProgress: (loaded, total) => emptyProgress.push([loaded, total]),
+      });
+      if (
+        !equalsBytes(emptyDigest, hashBytesSHA3512(new Uint8Array())) ||
+        emptyProgress.length !== 1 ||
+        emptyProgress[0][0] !== 0 ||
+        emptyProgress[0][1] !== 0
+      ) {
+        throw new Error('zero-length streaming hash or progress semantics are incorrect');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'ML-DSA deterministic and hedged signing modes must have distinct behavior',
+    fn: async () => {
+      const suiteId = SuiteId.ML_DSA_44;
+      const keys = generateKeypair(suiteId);
+      const message = textBytes('ml-dsa-randomization-behavior');
+      const contextBytes = buildContextBytes();
+      const deterministicA = signBytes({
+        suiteId,
+        message,
+        secretKey: keys.secretKey,
+        hedged: false,
+        contextBytes,
+      });
+      const deterministicB = signBytes({
+        suiteId,
+        message,
+        secretKey: keys.secretKey,
+        hedged: false,
+        contextBytes,
+      });
+      const hedgedA = signBytes({
+        suiteId,
+        message,
+        secretKey: keys.secretKey,
+        hedged: true,
+        contextBytes,
+      });
+      const hedgedB = signBytes({
+        suiteId,
+        message,
+        secretKey: keys.secretKey,
+        hedged: true,
+        contextBytes,
+      });
+      try {
+        if (!equalsBytes(deterministicA, deterministicB)) {
+          throw new Error('ML-DSA deterministic mode was not reproducible');
+        }
+        if (equalsBytes(hedgedA, hedgedB) || equalsBytes(deterministicA, hedgedA)) {
+          throw new Error('ML-DSA hedged mode did not incorporate fresh randomness');
+        }
+        for (const signature of [deterministicA, hedgedA, hedgedB]) {
+          if (!verifyBytes({ suiteId, message, signature, publicKey: keys.publicKey, contextBytes })) {
+            throw new Error('ML-DSA signing-mode output failed verification');
+          }
+        }
+      } finally {
+        wipeBytes(deterministicA);
+        wipeBytes(deterministicB);
+        wipeBytes(hedgedA);
+        wipeBytes(hedgedB);
+        wipeBytes(keys.secretKey);
+        wipeBytes(keys.publicKey);
+      }
+    },
+  });
+
+  if (suites.includes(SuiteId.SLH_DSA_SHAKE_128S)) {
+    cases.push({
+      name: 'SLH-DSA deterministic signing mode must be reproducible and verifiable',
+      fn: async () => {
+        const suiteId = SuiteId.SLH_DSA_SHAKE_128S;
+        const keys = generateKeypair(suiteId);
+        const message = textBytes('slh-dsa-deterministic-behavior');
+        const contextBytes = buildContextBytes();
+        const signatureA = signBytes({
+          suiteId,
+          message,
+          secretKey: keys.secretKey,
+          hedged: false,
+          contextBytes,
+        });
+        const signatureB = signBytes({
+          suiteId,
+          message,
+          secretKey: keys.secretKey,
+          hedged: false,
+          contextBytes,
+        });
+        try {
+          if (!equalsBytes(signatureA, signatureB)) {
+            throw new Error('SLH-DSA deterministic mode was not reproducible');
+          }
+          if (!verifyBytes({ suiteId, message, signature: signatureA, publicKey: keys.publicKey, contextBytes })) {
+            throw new Error('SLH-DSA deterministic output failed verification');
+          }
+        } finally {
+          wipeBytes(signatureA);
+          wipeBytes(signatureB);
+          wipeBytes(keys.secretKey);
+          wipeBytes(keys.publicKey);
+        }
+      },
+    });
+  }
+
+  cases.push({
     name: 'legacy unsigned display metadata remains compatible and outside the signature TBS',
     fn: async () => {
       const suiteId = SuiteId.ML_DSA_44;
@@ -549,6 +686,57 @@ function buildCases(suites) {
   }
 
   cases.push({
+    name: 'verification policy must distinguish trusted loaded-key success from no-key failure',
+    fn: async () => {
+      const suiteId = SuiteId.ML_DSA_44;
+      const keys = generateKeypair(suiteId);
+      const payload = textBytes('trusted-loaded-and-no-candidate-policy-check');
+      const publicKeyFile = packPublicKey({ suiteId, keyBytes: keys.publicKey });
+      const { sigFile } = buildSignatureContainer({
+        suiteId,
+        payloadBytes: payload,
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+
+      const parsedTrusted = unpackSignatureV2(sigFile);
+      const trusted = finalizeVerification(parsedTrusted, publicKeyFile, {
+        inputKind: 'text',
+        inputLength: payload.length,
+      });
+      if (
+        trusted.valid !== true ||
+        trusted.cryptoValid !== true ||
+        trusted.trusted !== true ||
+        trusted.trustSource !== 'loaded-key' ||
+        trusted.verifiedKeySource !== 'loaded' ||
+        trusted.embeddedKeyMatchesLoaded !== true ||
+        trusted.warning !== null
+      ) {
+        throw new Error('matching loaded-key verification did not return trusted semantics');
+      }
+
+      const parsedWithoutCandidate = unpackSignatureV2(sigFile);
+      parsedWithoutCandidate.metadata = {};
+      parsedWithoutCandidate.authenticatedMetadata = {};
+      const noCandidate = finalizeVerification(parsedWithoutCandidate, null, {
+        inputKind: 'text',
+        inputLength: payload.length,
+      });
+      if (
+        noCandidate.valid !== false ||
+        noCandidate.cryptoValid !== false ||
+        noCandidate.trusted !== false ||
+        noCandidate.code !== ErrorCode.E_INPUT_REQUIRED ||
+        noCandidate.trustSource !== 'none' ||
+        noCandidate.verifiedKeySource !== 'none'
+      ) {
+        throw new Error('no-candidate verification returned incorrect failure semantics');
+      }
+    },
+  });
+
+  cases.push({
     name: 'payload mismatch must not skip signature verification or authenticate an invalid container',
     fn: async () => {
       const suiteId = SuiteId.ML_DSA_44;
@@ -855,6 +1043,47 @@ function buildCases(suites) {
       }
       if (!failed) {
         throw new Error('invalid magic unexpectedly parsed');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'QSIG, PQPK, and PQSK truncation corpus must fail closed at every cut point',
+    fn: async () => {
+      const suiteId = SuiteId.ML_DSA_44;
+      const keys = generateKeypair(suiteId);
+      const { sigFile } = buildSignatureContainer({
+        suiteId,
+        payloadBytes: textBytes('complete-container-truncation-corpus'),
+        secretKey: keys.secretKey,
+        publicKey: keys.publicKey,
+      });
+      const publicKeyFile = packPublicKey({ suiteId, keyBytes: keys.publicKey });
+      const secretKeyFile = packSecretKey({ suiteId, keyBytes: keys.secretKey });
+      const fixtures = [
+        ['QSIG', sigFile, unpackSignatureV2],
+        ['PQPK', publicKeyFile, unpackPublicKey],
+        ['PQSK', secretKeyFile, unpackSecretKey],
+      ];
+
+      try {
+        for (const [label, fixture, unpack] of fixtures) {
+          for (let length = 0; length < fixture.length; length += 1) {
+            let rejected = false;
+            try {
+              unpack(fixture.slice(0, length));
+            } catch (error) {
+              rejected = typeof error?.code === 'string' && error.code.startsWith('E_');
+            }
+            if (!rejected) {
+              throw new Error(`${label} truncation unexpectedly parsed at ${length}/${fixture.length} bytes`);
+            }
+          }
+        }
+      } finally {
+        wipeBytes(secretKeyFile);
+        wipeBytes(keys.secretKey);
+        wipeBytes(keys.publicKey);
       }
     },
   });
@@ -1473,8 +1702,11 @@ function buildCases(suites) {
           hedged: true,
           contextBytes: new Uint8Array(MAX_CONTEXT_BYTES + 1),
         });
-      } catch (_err) {
-        failed = true;
+      } catch (err) {
+        failed =
+          err?.code === ErrorCode.E_FORMAT_LENGTH &&
+          err?.details?.field === 'contextBytesLength' &&
+          err?.details?.max === MAX_CONTEXT_BYTES;
       }
       if (!failed) {
         throw new Error('oversized context unexpectedly accepted');
@@ -1576,7 +1808,7 @@ function buildCases(suites) {
   cases.push({
     name: 'oversized signature bytes must be rejected',
     fn: async () => {
-      const signerPublicKey = new Uint8Array(32);
+      const signerPublicKey = new Uint8Array(getSuite(SuiteId.ML_DSA_44).signer.lengths.publicKey);
       const signerFingerprint = packSignerFingerprint({
         algId: FingerprintAlgId.SHA3_256,
         digest: computeFingerprintBytes(signerPublicKey),
@@ -1601,8 +1833,10 @@ function buildCases(suites) {
           authenticatedMetadata,
           displayMetadata: {},
         });
-      } catch (_err) {
-        failed = true;
+      } catch (err) {
+        failed =
+          err?.code === ErrorCode.E_FORMAT_LENGTH &&
+          (err?.details?.field === 'signature' || err?.details?.field === 'sigLen');
       }
       wipeBytes(authMetaBytes);
       if (!failed) {
@@ -1614,9 +1848,11 @@ function buildCases(suites) {
   cases.push({
     name: 'oversized payload file must be rejected',
     fn: async () => {
+      let sliceCalled = false;
       const oversizedFile = {
         size: MAX_PAYLOAD_FILE_BYTES + 1,
         slice() {
+          sliceCalled = true;
           throw new Error('slice should not be called for oversized input');
         },
       };
@@ -1624,11 +1860,15 @@ function buildCases(suites) {
       let failed = false;
       try {
         await hashFileSHA3512(oversizedFile);
-      } catch (_err) {
-        failed = true;
+      } catch (err) {
+        failed =
+          err?.code === ErrorCode.E_INPUT_TOO_LARGE &&
+          err?.details?.field === 'file' &&
+          err?.details?.max === MAX_PAYLOAD_FILE_BYTES &&
+          err?.details?.actual === MAX_PAYLOAD_FILE_BYTES + 1;
       }
-      if (!failed) {
-        throw new Error('oversized payload file unexpectedly accepted');
+      if (!failed || sliceCalled) {
+        throw new Error('oversized payload did not fail at the application size boundary');
       }
     },
   });
@@ -1638,7 +1878,11 @@ function buildCases(suites) {
     fn: async () => {
       const manager = createSecretSessionManager();
       const session = manager.generateSession(SuiteId.ML_DSA_65);
-      const exported = manager.exportSecretKeyFile(session.sessionHandle, session.exportConsentToken);
+      const authorization = manager.authorizeSecretKeyExport(session.sessionHandle);
+      const exported = manager.exportSecretKeyFile(
+        session.sessionHandle,
+        authorization.exportConsentToken
+      );
       const parsedSecret = unpackSecretKey(exported);
       const parsedPublic = unpackPublicKey(session.publicKeyFile);
       const derivedPublic = getPublicKeyFromSecret(parsedSecret.suiteId, parsedSecret.keyBytes);
@@ -1684,11 +1928,12 @@ function buildCases(suites) {
     fn: async () => {
       const manager = createSecretSessionManager();
       const session = manager.generateSession(SuiteId.ML_DSA_44);
+      manager.authorizeSecretKeyExport(session.sessionHandle);
       let failed = false;
       try {
         manager.exportSecretKeyFile(session.sessionHandle);
-      } catch (_err) {
-        failed = true;
+      } catch (err) {
+        failed = err?.code === ErrorCode.E_EXPORT_AUTH && err?.details?.reason === 'missing';
       }
 
       manager.clearAllSessions();
@@ -1704,11 +1949,12 @@ function buildCases(suites) {
     fn: async () => {
       const manager = createSecretSessionManager();
       const session = manager.generateSession(SuiteId.ML_DSA_44);
+      manager.authorizeSecretKeyExport(session.sessionHandle);
       let failed = false;
       try {
         manager.exportSecretKeyFile(session.sessionHandle, 'export-consent-wrong');
-      } catch (_err) {
-        failed = true;
+      } catch (err) {
+        failed = err?.code === ErrorCode.E_EXPORT_AUTH && err?.details?.reason === 'mismatch';
       }
 
       manager.clearAllSessions();

@@ -1,29 +1,32 @@
-name: Manual GitHub Pages Preview
-run-name: Manual Pages preview by @${{ github.actor }}
+name: Manual GitHub Pages demo
+run-name: Manual Pages demo by @${{ github.actor }}
 
 on:
   workflow_dispatch:
     inputs:
-      acknowledge_public_preview:
-        description: Acknowledge that this is a public preview, not a production release
+      acknowledge_public_demo:
+        description: Acknowledge that GitHub Pages is a header-limited demo, not the supported local security boundary
         required: true
         type: boolean
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
+# The dependency-running build job has read-only repository access. Only the
+# small deploy job receives the Pages and OIDC publication capabilities.
+permissions: {}
 
 concurrency:
-  group: pages-preview
-  cancel-in-progress: true
+  group: pages-demo
+  cancel-in-progress: false
 
 jobs:
   build:
-    if: ${{ inputs.acknowledge_public_preview }}
+    name: Build header-limited demo
+    if: ${{ inputs.acknowledge_public_demo && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
+      - name: Checkout reviewed source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Setup Node
@@ -32,33 +35,44 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install
+      - name: Install locked dependencies
         run: npm ci
 
-      - name: Self-test
-        run: npm run selftest
+      - name: Full release-candidate verification
+        env:
+          FULL_SELFTEST: '1'
+        run: npm run check
 
-      - name: Reproducible build check
+      - name: Pinned external ML-DSA verification vectors
+        run: npm run test:external-vectors
+
+      - name: Reproducible demo build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
+          PRIVATE_KEY_OPERATIONS: disabled
         run: npm run check:repro
 
-      - name: Setup Pages
-        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Confirm checks did not modify tracked sources
+        run: git diff --exit-code
 
-      - name: Upload artifact
+      - name: Upload demo artifact
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: dist
 
   deploy:
-    if: ${{ inputs.acknowledge_public_preview }}
+    name: Publish demo
+    if: ${{ inputs.acknowledge_public_demo && github.ref == 'refs/heads/main' }}
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy public preview to GitHub Pages
+      - name: Deploy header-limited public demo
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

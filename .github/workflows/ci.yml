@@ -64,3 +64,6 @@ jobs:
         env:
           FULL_SELFTEST: '1'
         run: npm run selftest
+
+      - name: Pinned external ML-DSA verification vectors
+        run: npm run test:external-vectors

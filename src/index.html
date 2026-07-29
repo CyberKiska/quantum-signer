@@ -21,9 +21,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="base-path" content="%BASE_PATH%" />
+    <meta name="private-key-operations" content="%PRIVATE_KEY_OPERATIONS%" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; connect-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; worker-src 'self'; frame-src 'none'; media-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
+      content="%DOCUMENT_CSP%"
     />
     <meta name="referrer" content="no-referrer" />
     <title>Quantum Signer</title>
@@ -74,6 +75,10 @@
 
       <main class="main-content">
         <div id="toast-container" class="toast-container"></div>
+        <div id="delivery-warning" class="delivery-warning hidden" role="status">
+          Private-key operations are disabled for this delivery. Use the loopback production
+          preview with its verified CSP and isolation headers for signing or key management.
+        </div>
 
         <section id="tab-keys" class="tab-panel module-panel module-keys active">
           <header class="section-header">

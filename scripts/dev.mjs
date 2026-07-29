@@ -13,6 +13,8 @@ const srcDir = path.join(root, 'src');
 const distDir = path.join(root, 'dist');
 
 const port = Number(process.env.PORT || 5173);
+const host = '127.0.0.1';
+const previewMode = process.argv.includes('--preview');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -40,7 +42,7 @@ async function serveFile(urlPath) {
 }
 
 async function runBuild() {
-  await buildProject({ minify: false });
+  await buildProject({ minify: previewMode, sourcemap: !previewMode });
 }
 
 async function main() {
@@ -52,6 +54,7 @@ async function main() {
       const response = await serveFile(url);
       const headers = {
         'Content-Type': response.type,
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
         ...STANDARD_SECURITY_HEADERS,
       };
       // HSTS is ignored over this intentionally HTTP-only localhost server.
@@ -66,9 +69,11 @@ async function main() {
     }
   });
 
-  server.listen(port, () => {
-    console.log(`Dev server: http://localhost:${port}`);
+  server.listen(port, host, () => {
+    console.log(`${previewMode ? 'Local production preview' : 'Dev server'}: http://${host}:${port}`);
   });
+
+  if (previewMode) return;
 
   let timer = null;
   watch(srcDir, { recursive: true }, () => {

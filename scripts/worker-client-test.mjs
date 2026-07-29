@@ -110,6 +110,30 @@ assert((await concurrentCall)?.hashHex === '00', 'concurrent request did not sur
 const timedRequest = workers[0].messages[0];
 workers[0].respond({ id: timedRequest.id, type: 'RESULT', result: { stale: true } });
 
+const abandonedKeygen = client
+  .call('KEYGEN', { suiteId: 1 }, { timeoutMs: 50 })
+  .then(() => null, (err) => err);
+const abandonedKeygenRequest = workers[0].messages.at(-1);
+scheduler.advance(50);
+const abandonedKeygenError = await abandonedKeygen;
+assert(abandonedKeygenError?.message.includes('cleared automatically'), 'keygen timeout omitted cleanup semantics');
+workers[0].respond({
+  id: abandonedKeygenRequest.id,
+  type: 'RESULT',
+  result: { sessionHandle: 'orphaned-session', suiteId: 1 },
+});
+const orphanCleanupRequest = workers[0].messages.at(-1);
+assert(orphanCleanupRequest.type === 'CLEAR_SECRET_SESSION', 'late keygen result did not request session cleanup');
+assert(
+  orphanCleanupRequest.payload?.secretSessionHandle === 'orphaned-session',
+  'late keygen cleanup targeted the wrong secret session'
+);
+workers[0].respond({
+  id: orphanCleanupRequest.id,
+  type: 'RESULT',
+  result: { cleared: true },
+});
+
 const failedCall = client
   .call('HASH_TEXT', { text: 'worker-failure' }, { timeoutMs: 200 })
   .then(() => null, (err) => err);

@@ -6,14 +6,18 @@
   "description": "Static client-only post-quantum file signing (ML-DSA / SLH-DSA; experimental Falcon)",
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "preview": "node scripts/dev.mjs --preview",
     "build": "node scripts/build.mjs",
     "check:repro": "node scripts/repro-check.mjs",
     "test:headers": "node scripts/security-headers-test.mjs",
+    "test:live-headers": "node scripts/live-security-headers-test.mjs",
+    "test:local-headers": "node scripts/local-security-headers-test.mjs",
+    "test:external-vectors": "node scripts/external-vectors-test.mjs",
     "test:p0-security": "node scripts/p0-security-test.mjs",
     "test:session": "node scripts/secret-session-test.mjs",
     "test:worker": "node scripts/worker-client-test.mjs",
     "selftest": "npm run test:headers && npm run test:p0-security && npm run test:session && npm run test:worker && node scripts/selftest.mjs",
-    "check": "npm run selftest && npm run build"
+    "check": "npm run selftest && npm run test:local-headers && npm run build"
   },
   "dependencies": {
     "@noble/hashes": "2.2.0",

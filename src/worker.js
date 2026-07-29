@@ -43,6 +43,7 @@ export const WorkerMessageType = Object.freeze({
   HASH_FILE: 'HASH_FILE',
   KEYGEN: 'KEYGEN',
   IMPORT_SECRET: 'IMPORT_SECRET',
+  AUTHORIZE_SECRET_EXPORT: 'AUTHORIZE_SECRET_EXPORT',
   EXPORT_SECRET: 'EXPORT_SECRET',
   CLEAR_SECRET_SESSION: 'CLEAR_SECRET_SESSION',
   SIGN: 'SIGN',
@@ -78,6 +79,7 @@ const Handlers = {
   [WorkerMessageType.HASH_TEXT]: handleHashText,
   [WorkerMessageType.KEYGEN]: handleKeygen,
   [WorkerMessageType.IMPORT_SECRET]: handleImportSecret,
+  [WorkerMessageType.AUTHORIZE_SECRET_EXPORT]: handleAuthorizeSecretExport,
   [WorkerMessageType.EXPORT_SECRET]: handleExportSecret,
   [WorkerMessageType.CLEAR_SECRET_SESSION]: handleClearSecretSession,
   [WorkerMessageType.SIGN]: handleSign,
@@ -102,7 +104,19 @@ self.onmessage = async (event) => {
     }
 
     const result = await Handlers[type](id, request.payload || {});
-    postMessage({ id, type: 'RESULT', op: type, ok: true, result });
+    const response = { id, type: 'RESULT', op: type, ok: true, result };
+    if (type === WorkerMessageType.EXPORT_SECRET && result?.secretKeyFile instanceof Uint8Array) {
+      // Transfer rather than structured-clone the plaintext key container.
+      // The worker-side source buffer is detached when postMessage succeeds.
+      try {
+        postMessage(response, [result.secretKeyFile.buffer]);
+      } catch (error) {
+        wipeBytes(result.secretKeyFile);
+        throw error;
+      }
+    } else {
+      postMessage(response);
+    }
   } catch (err) {
     const normalized = normalizeError(err);
     postMessage({
@@ -194,6 +208,13 @@ async function handleImportSecret(_id, payload) {
   } finally {
     wipeBytes(secretKeyFile);
   }
+}
+
+async function handleAuthorizeSecretExport(_id, payload) {
+  if (typeof payload.secretSessionHandle !== 'string' || payload.secretSessionHandle.length === 0) {
+    throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'secretSessionHandle' });
+  }
+  return secretSessions.authorizeSecretKeyExport(payload.secretSessionHandle);
 }
 
 async function handleExportSecret(_id, payload) {
