@@ -5,6 +5,7 @@ import {
 } from '../src/ui/common.js';
 import { resolveSignInputKind } from '../src/core/sign-input.js';
 import { ErrorCode, createError, normalizeError } from '../src/crypto/errors.js';
+import { equalsBytes, equalsHex } from '../src/crypto/bytes.js';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -130,5 +131,11 @@ const internalAppError = normalizeError(
 );
 assert(internalAppError.message === 'Internal error.', 'internal AppError override crossed the worker boundary');
 assert(internalAppError.details === null, 'internal AppError details crossed the worker boundary');
+
+assert(equalsBytes(Uint8Array.of(1, 2), Uint8Array.of(1, 2)), 'equal byte strings did not compare equal');
+assert(!equalsBytes(Uint8Array.of(1, 2), Uint8Array.of(1, 3)), 'different byte strings compared equal');
+assert(!equalsBytes(Uint8Array.of(1), Uint8Array.of(1, 0)), 'different byte lengths compared equal');
+assert(equalsHex('00aaff', '00aaff'), 'equal hexadecimal strings did not compare equal');
+assert(!equalsHex('00aaff', '00aafe'), 'different hexadecimal strings compared equal');
 
 console.log('P0 display-integrity and sign-protocol tests: PASS');

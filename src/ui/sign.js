@@ -1,4 +1,4 @@
-import { wipeBytes } from '../crypto/bytes.js';
+import { equalsHex, wipeBytes } from '../crypto/bytes.js';
 import {
   AuthDigestAlgId,
   HashAlgId,
@@ -376,14 +376,14 @@ export function setupSignTab(state, workerClient) {
       if (
         result.created !== true ||
         result.selfVerified !== true ||
-        result.fileHashHex !== reviewSnapshot.hashHex ||
+        !equalsHex(result.fileHashHex, reviewSnapshot.hashHex) ||
         result.inputLength !== reviewSnapshot.inputLength ||
         result.suiteId !== reviewSnapshot.suiteId ||
         result.signatureProfileId !== reviewSnapshot.signatureProfileId ||
         result.hashAlgId !== reviewSnapshot.hashAlgId ||
         result.authDigestAlgId !== reviewSnapshot.authDigestAlgId ||
         result.context !== reviewSnapshot.context ||
-        result.signerFingerprintHex !== reviewSnapshot.signerFingerprintHex
+        !equalsHex(result.signerFingerprintHex, reviewSnapshot.signerFingerprintHex)
       ) {
         if (result.sigBytes) wipeBytes(result.sigBytes);
         throw new Error('Signing result does not match the reviewed input or signer; output was discarded.');

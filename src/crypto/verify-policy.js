@@ -13,7 +13,7 @@ import {
   unpackSignerFingerprint,
 } from '../formats/containers.js';
 import { validateSignatureAndKeySuites } from './validate.js';
-import { equalsBytes } from './bytes.js';
+import { equalsBytes, equalsHex } from './bytes.js';
 import { bytesToHexLower } from '../formats/encoding.js';
 
 export function getSignatureMetadataFingerprintHex(parsedSig) {
@@ -210,7 +210,7 @@ export function finalizePayloadVerification(parsedSig, publicKeyFile, hashDetail
   const declaredHashHex = bytesToHexLower(parsedSig.fileHash);
   const signatureResult = finalizeVerification(parsedSig, publicKeyFile, hashDetails);
   const signaturePolicyValid = signatureResult.valid === true;
-  const payloadMatches = actualHashHex === declaredHashHex;
+  const payloadMatches = equalsHex(actualHashHex, declaredHashHex);
   const valid = signaturePolicyValid && payloadMatches;
 
   return {

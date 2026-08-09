@@ -1,5 +1,5 @@
 import { MAX_SIGNATURE_FILE_BYTES } from '../crypto/policy.js';
-import { wipeBytes } from '../crypto/bytes.js';
+import { equalsHex, wipeBytes } from '../crypto/bytes.js';
 import { bytesToHexLower } from '../formats/encoding.js';
 import { HashAlgId, getHashName, getSuiteName, unpackSignatureV2 } from '../formats/containers.js';
 import { createOperationGate } from '../core/operation-gate.js';
@@ -32,6 +32,13 @@ const TEXT_PREVIEW_DEBOUNCE_MS = 180;
 
 function isSlowSuite(suiteId) {
   return getSuiteName(suiteId).startsWith('SLH-DSA');
+}
+
+function equalsOptionalHex(left, right) {
+  if (left === null || left === undefined || right === null || right === undefined) {
+    return left === right;
+  }
+  return equalsHex(left, right);
 }
 
 function setBadge(badgeEl, tone, text) {
@@ -239,7 +246,7 @@ export function setupVerifyTab(state, workerClient) {
 
   function deriveLoadedKeyMatches(embeddedFingerprintHex) {
     if (!embeddedFingerprintHex || !state.keys.public) return null;
-    return state.keys.public.fingerprintHex === embeddedFingerprintHex;
+    return equalsHex(state.keys.public.fingerprintHex, embeddedFingerprintHex);
   }
 
   function applyInputModeUi() {
@@ -753,17 +760,18 @@ export function setupVerifyTab(state, workerClient) {
         result.loadedKeyFingerprintHex || (result.keySource === 'keys' ? result.signerFingerprintHex : null);
       const verificationKeyWasEvaluated = result.signatureEvaluated === true;
       if (
-        resultInputHashHex !== reviewSnapshot.inputHashHex ||
+        !equalsHex(resultInputHashHex, reviewSnapshot.inputHashHex) ||
         result.inputLength !== reviewSnapshot.inputLength ||
-        result.declaredHashHex !== reviewSnapshot.declaredHashHex ||
+        !equalsHex(result.declaredHashHex, reviewSnapshot.declaredHashHex) ||
         result.suiteId !== reviewSnapshot.suiteId ||
         result.signatureProfileId !== reviewSnapshot.signatureProfileId ||
         result.hashAlgId !== reviewSnapshot.hashAlgId ||
         result.authDigestAlgId !== reviewSnapshot.authDigestAlgId ||
         result.context !== reviewSnapshot.context ||
         result.signatureLength !== reviewSnapshot.signatureLength ||
-        result.signatureMetadataFingerprintHex !== reviewSnapshot.embeddedFingerprintHex ||
-        (verificationKeyWasEvaluated && resultLoadedKeyFingerprintHex !== reviewSnapshot.loadedKeyFingerprintHex)
+        !equalsOptionalHex(result.signatureMetadataFingerprintHex, reviewSnapshot.embeddedFingerprintHex) ||
+        (verificationKeyWasEvaluated &&
+          !equalsOptionalHex(resultLoadedKeyFingerprintHex, reviewSnapshot.loadedKeyFingerprintHex))
       ) {
         throw new Error('Verification result does not match the reviewed inputs; result was discarded.');
       }
