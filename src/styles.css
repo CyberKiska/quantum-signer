@@ -247,6 +247,11 @@ h4 {
   line-height: 1.4;
 }
 
+.build-id {
+  font-family: var(--font-mono);
+  word-break: break-all;
+}
+
 .sidebar-selftest {
   margin-top: 0.6rem;
   padding: 0.3rem 0.55rem;

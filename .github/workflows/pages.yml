@@ -43,13 +43,14 @@ jobs:
           FULL_SELFTEST: '1'
         run: npm run check
 
-      - name: Pinned external ML-DSA verification vectors
+      - name: Pinned Wycheproof and NIST ACVP vectors
         run: npm run test:external-vectors
 
       - name: Reproducible demo build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
           PRIVATE_KEY_OPERATIONS: disabled
+          BUILD_COMMIT: ${{ github.sha }}
         run: npm run check:repro
 
       - name: Confirm checks did not modify tracked sources

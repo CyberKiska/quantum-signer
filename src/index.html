@@ -22,13 +22,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="base-path" content="%BASE_PATH%" />
     <meta name="private-key-operations" content="%PRIVATE_KEY_OPERATIONS%" />
+    <meta name="build-commit" content="%BUILD_COMMIT%" />
     <meta
       http-equiv="Content-Security-Policy"
       content="%DOCUMENT_CSP%"
     />
     <meta name="referrer" content="no-referrer" />
     <title>Quantum Signer</title>
-    <link rel="stylesheet" href="%BASE_PATH%styles.css" />
+    <link rel="stylesheet" href="%BASE_PATH%styles.css" integrity="%STYLE_INTEGRITY%" crossorigin="anonymous" />
   </head>
   <body>
     <div class="app-shell">
@@ -69,6 +70,7 @@
             Not FIPS validated.<br />
             Avoid high-value keys.<br />
             <a href="https://github.com/CyberKiska/quantum-signer" target="_blank" rel="noopener noreferrer">Source code</a>
+            <br />Build: <span class="build-id" title="%BUILD_COMMIT%">%BUILD_COMMIT_SHORT%</span>
           </div>
         </div>
       </aside>
@@ -275,6 +277,6 @@
       </main>
     </div>
 
-    <script type="module" src="%BASE_PATH%assets/app.js"></script>
+    <script type="module" src="%BASE_PATH%assets/app.js" integrity="%APP_INTEGRITY%" crossorigin="anonymous"></script>
   </body>
 </html>

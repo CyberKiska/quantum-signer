@@ -1,0 +1,8 @@
+# Cryptographic formats, key handling, build policy, and release workflows
+# require an explicit review from the repository owner.
+/src/crypto/ @CyberKiska
+/src/formats/ @CyberKiska
+/scripts/ @CyberKiska
+/.github/workflows/ @CyberKiska
+/package.json @CyberKiska
+/package-lock.json @CyberKiska

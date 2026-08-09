@@ -2,6 +2,7 @@
   "name": "quantum-signer",
   "version": "1.2.0",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "description": "Static client-only post-quantum file signing with ML-DSA and SLH-DSA",
   "scripts": {
@@ -16,7 +17,9 @@
     "test:p0-security": "node scripts/p0-security-test.mjs",
     "test:session": "node scripts/secret-session-test.mjs",
     "test:worker": "node scripts/worker-client-test.mjs",
-    "selftest": "npm run test:headers && npm run test:p0-security && npm run test:session && npm run test:worker && node scripts/selftest.mjs",
+    "test:build-config": "node scripts/build-config-test.mjs",
+    "test:mutation-corpus": "node scripts/container-mutation-test.mjs",
+    "selftest": "npm run test:headers && npm run test:build-config && npm run test:p0-security && npm run test:session && npm run test:worker && npm run test:mutation-corpus && node scripts/selftest.mjs",
     "check": "npm run selftest && npm run test:local-headers && npm run build"
   },
   "dependencies": {

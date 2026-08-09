@@ -2,6 +2,13 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
+import {
+  getPublicKeyFromSecret,
+  signBytes,
+  verifyBytes,
+} from '../src/crypto/algorithms.js';
+import { wipeBytes } from '../src/crypto/bytes.js';
+import { SuiteId } from '../src/crypto/suite-metadata.js';
 
 const WYCHEPROOF_COMMIT = 'b61843a9a5115bb758134b6a1f5d5e502d445342';
 const VECTOR_SPECS = Object.freeze([
@@ -36,6 +43,113 @@ function hexToBytes(value, field) {
   assert(typeof value === 'string', `${field} is not a string`);
   assert(value.length % 2 === 0 && /^[0-9a-f]*$/u.test(value), `${field} is not canonical lowercase hex`);
   return Uint8Array.from(Buffer.from(value, 'hex'));
+}
+
+function base64ToBytes(value, field) {
+  assert(typeof value === 'string' && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value), `${field} is not canonical base64`);
+  const bytes = Uint8Array.from(Buffer.from(value, 'base64'));
+  assert(Buffer.from(bytes).toString('base64') === value, `${field} has non-canonical pad bits`);
+  return bytes;
+}
+
+async function testPinnedNistSignatureGenerationVectors() {
+  const vectorPath = path.join(path.dirname(new URL(import.meta.url).pathname), 'nist-acvp-mldsa-siggen-vectors.json');
+  const vectorBytes = await readFile(vectorPath);
+  const vectors = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(vectorBytes));
+  assert(vectors.schema === 'quantum-signer-nist-acvp-mldsa-siggen/v1', 'unexpected NIST sigGen vector schema');
+  assert(vectors.source?.commit === 'a7f283cdc87d2d6dd93c1bac59e5622c5f9f8324', 'unexpected NIST ACVP source commit');
+  assert(vectors.vectors?.length === 3, 'expected one NIST sigGen vector per ML-DSA parameter set');
+
+  const suites = {
+    'ML-DSA-44': SuiteId.ML_DSA_44,
+    'ML-DSA-65': SuiteId.ML_DSA_65,
+    'ML-DSA-87': SuiteId.ML_DSA_87,
+  };
+
+  for (const vector of vectors.vectors) {
+    const suiteId = suites[vector.parameterSet];
+    assert(Number.isInteger(suiteId), `unsupported NIST vector parameter set: ${vector.parameterSet}`);
+    const message = base64ToBytes(vector.messageBase64, `${vector.parameterSet} message`);
+    const secretKey = base64ToBytes(vector.secretKeyBase64, `${vector.parameterSet} secret key`);
+    const context = base64ToBytes(vector.contextBase64, `${vector.parameterSet} context`);
+    let signature;
+    let publicKey;
+    try {
+      signature = signBytes({
+        suiteId,
+        message,
+        secretKey,
+        hedged: false,
+        contextBytes: context,
+      });
+      const actualDigest = createHash('sha256').update(signature).digest('hex');
+      assert(
+        actualDigest === vector.expectedSignatureSha256,
+        `${vector.parameterSet} NIST ACVP sigGen tcId ${vector.tcId} mismatch`
+      );
+      publicKey = getPublicKeyFromSecret(suiteId, secretKey);
+      const verifier = VECTOR_SPECS.find((spec) => spec.algorithm === vector.parameterSet)?.verifier;
+      assert(verifier?.verify(signature, message, publicKey, { context }) === true, `${vector.parameterSet} generated NIST signature did not verify`);
+      console.log(`  ${vector.parameterSet}: NIST ACVP deterministic sigGen PASS (tcId=${vector.tcId})`);
+    } finally {
+      wipeBytes(signature);
+      wipeBytes(publicKey);
+      wipeBytes(message);
+      wipeBytes(secretKey);
+      wipeBytes(context);
+    }
+  }
+}
+
+async function testPinnedNistSlhSignatureGenerationVectors() {
+  const vectorPath = path.join(path.dirname(new URL(import.meta.url).pathname), 'nist-acvp-slhdsa-siggen-vectors.json');
+  const vectorBytes = await readFile(vectorPath);
+  const vectors = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(vectorBytes));
+  assert(vectors.schema === 'quantum-signer-nist-acvp-slhdsa-siggen/v1', 'unexpected NIST SLH sigGen vector schema');
+  assert(vectors.source?.commit === 'a7f283cdc87d2d6dd93c1bac59e5622c5f9f8324', 'unexpected NIST SLH ACVP source commit');
+  assert(vectors.vectors?.length === 3, 'expected one NIST sigGen vector per supported SLH-DSA parameter set');
+
+  const suites = {
+    'SLH-DSA-SHAKE-128s': SuiteId.SLH_DSA_SHAKE_128S,
+    'SLH-DSA-SHAKE-192s': SuiteId.SLH_DSA_SHAKE_192S,
+    'SLH-DSA-SHAKE-256s': SuiteId.SLH_DSA_SHAKE_256S,
+  };
+
+  for (const vector of vectors.vectors) {
+    const suiteId = suites[vector.parameterSet];
+    assert(Number.isInteger(suiteId), `unsupported NIST vector parameter set: ${vector.parameterSet}`);
+    const message = base64ToBytes(vector.messageBase64, `${vector.parameterSet} message`);
+    const secretKey = base64ToBytes(vector.secretKeyBase64, `${vector.parameterSet} secret key`);
+    const context = base64ToBytes(vector.contextBase64, `${vector.parameterSet} context`);
+    let signature;
+    let publicKey;
+    try {
+      signature = signBytes({
+        suiteId,
+        message,
+        secretKey,
+        hedged: false,
+        contextBytes: context,
+      });
+      const actualDigest = createHash('sha256').update(signature).digest('hex');
+      assert(
+        actualDigest === vector.expectedSignatureSha256,
+        `${vector.parameterSet} NIST ACVP sigGen tcId ${vector.tcId} mismatch`
+      );
+      publicKey = getPublicKeyFromSecret(suiteId, secretKey);
+      assert(
+        verifyBytes({ suiteId, message, signature, publicKey, contextBytes: context }) === true,
+        `${vector.parameterSet} generated NIST signature did not verify`
+      );
+      console.log(`  ${vector.parameterSet}: NIST ACVP deterministic sigGen PASS (tcId=${vector.tcId})`);
+    } finally {
+      wipeBytes(signature);
+      wipeBytes(publicKey);
+      wipeBytes(message);
+      wipeBytes(secretKey);
+      wipeBytes(context);
+    }
+  }
 }
 
 async function loadPinnedVectorBytes(spec) {
@@ -112,3 +226,5 @@ for (const spec of VECTOR_SPECS) {
 }
 
 console.log(`Pinned Wycheproof ML-DSA verification vectors: PASS (${totalPassed}/${totalTests})`);
+await testPinnedNistSignatureGenerationVectors();
+await testPinnedNistSlhSignatureGenerationVectors();

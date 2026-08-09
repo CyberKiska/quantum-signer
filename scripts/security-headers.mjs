@@ -66,6 +66,9 @@ export function buildStaticHeadersFile(basePath) {
     headerBlock(`${basePath}styles.css`, {
       'Cache-Control': 'no-cache, no-store, must-revalidate',
     }),
+    headerBlock(`${basePath}build-manifest.json`, {
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+    }),
     headerBlock(`${basePath}assets/*`, {
       'Cache-Control': 'no-cache, no-store, must-revalidate',
     }),
