@@ -11,6 +11,11 @@ import { equalsBytes, wipeBytes } from './bytes.js';
 import { ErrorCode, createError } from './errors.js';
 import { MAX_KEY_FILE_BYTES, assertBytesLimit } from './policy.js';
 import { utf8ToBytesStrict } from './text-encoding.js';
+import {
+  decryptSecretKeyFile,
+  encryptSecretKeyFile,
+  isProtectedSecretKeyFile,
+} from './key-protection.js';
 import { packPublicKey, packSecretKey, unpackSecretKey } from '../formats/containers.js';
 
 const IMPORT_PCT_CONTEXT = 'quantum-signer/private-key-import-pct/v1';
@@ -358,12 +363,30 @@ export function createSecretSessionManager({
       }
     },
 
-    importSecretKeyFile(secretKeyFile) {
+    async importSecretKeyFile(secretKeyFile, passphrase) {
       assertSessionCapacity();
       assertBytesLimit(secretKeyFile, MAX_KEY_FILE_BYTES, 'secretKeyFile');
-      const parsedSecret = unpackSecretKey(secretKeyFile);
+      let decryptedSecretKeyFile;
+      let parsedSecret;
       let verifiedPublicKey;
       try {
+        if (isProtectedSecretKeyFile(secretKeyFile)) {
+          if (typeof passphrase !== 'string' || passphrase.length === 0) {
+            throw createError(ErrorCode.E_KEY_PASSPHRASE_REQUIRED);
+          }
+          const decrypted = await decryptSecretKeyFile(secretKeyFile, passphrase);
+          decryptedSecretKeyFile = decrypted.secretKeyFile;
+          parsedSecret = unpackSecretKey(decryptedSecretKeyFile);
+          if (parsedSecret.suiteId !== decrypted.suiteId) {
+            throw createError(ErrorCode.E_KEY_SUITE_MISMATCH, {
+              protectedSuiteId: decrypted.suiteId,
+              secretKeySuiteId: parsedSecret.suiteId,
+            });
+          }
+        } else {
+          // Backward-compatible import only. New exports are always encrypted.
+          parsedSecret = unpackSecretKey(secretKeyFile);
+        }
         verifiedPublicKey = validateImportedSecretKeyPair(parsedSecret.suiteId, parsedSecret.keyBytes);
         return createSession({
           suiteId: parsedSecret.suiteId,
@@ -372,7 +395,8 @@ export function createSecretSessionManager({
         });
       } finally {
         wipeBytes(verifiedPublicKey);
-        wipeBytes(parsedSecret.keyBytes);
+        wipeBytes(parsedSecret?.keyBytes);
+        wipeBytes(decryptedSecretKeyFile);
       }
     },
 
@@ -389,7 +413,7 @@ export function createSecretSessionManager({
       };
     },
 
-    exportSecretKeyFile(handle, exportConsentToken) {
+    async exportSecretKeyFile(handle, exportConsentToken, { passphrase, rawExport = false } = {}) {
       const session = requireSession(handle, { touch: false });
       const authorization = session.exportAuthorization;
       // Consume every grant on its first use attempt. This makes export
@@ -404,10 +428,26 @@ export function createSecretSessionManager({
       if (readNow() >= authorization.expiresAt) {
         throw createError(ErrorCode.E_EXPORT_AUTH, { field: 'exportConsentToken', reason: 'expired' });
       }
-      return packSecretKey({
-        suiteId: session.suiteId,
-        keyBytes: session.secretKey,
-      });
+      let plaintextSecretKeyFile;
+      try {
+        plaintextSecretKeyFile = packSecretKey({
+          suiteId: session.suiteId,
+          keyBytes: session.secretKey,
+        });
+        if (rawExport === true) {
+          // Explicit compatibility escape hatch. Callers must opt in for each
+          // export; encrypted output remains the API default.
+          const rawCopy = Uint8Array.from(plaintextSecretKeyFile);
+          return rawCopy;
+        }
+        return await encryptSecretKeyFile({
+          suiteId: session.suiteId,
+          secretKeyFile: plaintextSecretKeyFile,
+          passphrase,
+        });
+      } finally {
+        wipeBytes(plaintextSecretKeyFile);
+      }
     },
 
     getSession(handle) {

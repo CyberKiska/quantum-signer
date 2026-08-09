@@ -124,9 +124,19 @@
                 <h3>Active Key Session</h3>
                 <div class="button-group compact no-margin">
                   <button id="keys-export-public" class="secondary" type="button" disabled>Export Public</button>
-                  <button id="keys-export-secret" class="secondary" type="button" disabled>Export Secret</button>
+                  <button id="keys-export-secret" class="secondary" type="button" disabled>Export Secret (Encrypted)</button>
                   <button id="keys-clear" class="danger" type="button">End Session</button>
                 </div>
+              </div>
+
+              <div class="raw-export-optin">
+                <label class="checkbox-inline danger-copy" for="keys-export-raw-optin">
+                  <input id="keys-export-raw-optin" type="checkbox" />
+                  Enable unencrypted raw private-key export
+                </label>
+                <p class="muted-copy">
+                  Advanced compatibility option. Raw files provide no confidentiality if copied, synced, backed up, or stolen.
+                </p>
               </div>
 
               <div id="keys-info" class="mono-box keys-info-box">No keys loaded in active memory.</div>

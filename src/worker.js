@@ -106,7 +106,7 @@ self.onmessage = async (event) => {
     const result = await Handlers[type](id, request.payload || {});
     const response = { id, type: 'RESULT', op: type, ok: true, result };
     if (type === WorkerMessageType.EXPORT_SECRET && result?.secretKeyFile instanceof Uint8Array) {
-      // Transfer rather than structured-clone the plaintext key container.
+      // Transfer rather than structured-clone the encrypted key container.
       // The worker-side source buffer is detached when postMessage succeeds.
       try {
         postMessage(response, [result.secretKeyFile.buffer]);
@@ -198,7 +198,7 @@ async function handleKeygen(_id, payload) {
 async function handleImportSecret(_id, payload) {
   const secretKeyFile = await readBinaryInput(payload.secretKeyFile, 'secretKeyFile', MAX_KEY_FILE_BYTES);
   try {
-    const session = secretSessions.importSecretKeyFile(secretKeyFile);
+    const session = await secretSessions.importSecretKeyFile(secretKeyFile, payload.passphrase);
     const suite = getSuite(session.suiteId);
     return {
       suiteId: session.suiteId,
@@ -224,7 +224,14 @@ async function handleExportSecret(_id, payload) {
   if (typeof payload.exportConsentToken !== 'string' || payload.exportConsentToken.length === 0) {
     throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'exportConsentToken' });
   }
-  const secretKeyFile = secretSessions.exportSecretKeyFile(payload.secretSessionHandle, payload.exportConsentToken);
+  const secretKeyFile = await secretSessions.exportSecretKeyFile(
+    payload.secretSessionHandle,
+    payload.exportConsentToken,
+    {
+      passphrase: payload.passphrase,
+      rawExport: payload.rawExport === true,
+    }
+  );
   return { secretKeyFile };
 }
 

@@ -148,6 +148,117 @@ export function downloadBytes(filename, bytes, mime = 'application/octet-stream'
   setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
+let passphraseDialogSequence = 0;
+
+export function requestPassphrase({
+  title = 'Private-key passphrase',
+  description = '',
+  confirmPassphrase = false,
+} = {}) {
+  return new Promise((resolve) => {
+    const sequence = passphraseDialogSequence++;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'passphrase-dialog';
+    dialog.setAttribute('aria-labelledby', `passphrase-title-${sequence}`);
+
+    const form = document.createElement('form');
+    form.method = 'dialog';
+    form.className = 'passphrase-form';
+
+    const heading = document.createElement('h3');
+    heading.id = `passphrase-title-${sequence}`;
+    heading.textContent = title;
+    form.append(heading);
+
+    if (description) {
+      const copy = document.createElement('p');
+      copy.className = 'muted-copy';
+      copy.textContent = description;
+      form.append(copy);
+    }
+
+    const passphraseLabel = document.createElement('label');
+    passphraseLabel.htmlFor = `passphrase-input-${sequence}`;
+    passphraseLabel.textContent = 'Passphrase';
+    const passphraseInput = document.createElement('input');
+    passphraseInput.id = passphraseLabel.htmlFor;
+    passphraseInput.type = 'password';
+    passphraseInput.autocomplete = confirmPassphrase ? 'new-password' : 'current-password';
+    passphraseInput.required = true;
+    if (confirmPassphrase) passphraseInput.minLength = 12;
+    form.append(passphraseLabel, passphraseInput);
+
+    let confirmationInput = null;
+    if (confirmPassphrase) {
+      const confirmationLabel = document.createElement('label');
+      confirmationLabel.htmlFor = `passphrase-confirm-${sequence}`;
+      confirmationLabel.textContent = 'Confirm passphrase';
+      confirmationInput = document.createElement('input');
+      confirmationInput.id = confirmationLabel.htmlFor;
+      confirmationInput.type = 'password';
+      confirmationInput.autocomplete = 'new-password';
+      confirmationInput.required = true;
+      confirmationInput.minLength = 12;
+      form.append(confirmationLabel, confirmationInput);
+    }
+
+    const status = document.createElement('p');
+    status.className = 'dialog-error';
+    status.setAttribute('role', 'alert');
+    form.append(status);
+
+    const buttons = document.createElement('div');
+    buttons.className = 'button-group compact dialog-actions';
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'secondary';
+    cancelButton.textContent = 'Cancel';
+    const submitButton = document.createElement('button');
+    submitButton.type = 'submit';
+    submitButton.className = 'primary';
+    submitButton.textContent = confirmPassphrase ? 'Encrypt and export' : 'Unlock';
+    buttons.append(cancelButton, submitButton);
+    form.append(buttons);
+    dialog.append(form);
+    document.body.append(dialog);
+
+    let settled = false;
+    function finish(value) {
+      if (settled) return;
+      settled = true;
+      passphraseInput.value = '';
+      if (confirmationInput) confirmationInput.value = '';
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      resolve(value);
+    }
+
+    cancelButton.addEventListener('click', () => finish(null));
+    dialog.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      finish(null);
+    });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const passphrase = passphraseInput.value;
+      if (confirmPassphrase && Array.from(passphrase).length < 12) {
+        status.textContent = 'Use at least 12 characters.';
+        passphraseInput.focus();
+        return;
+      }
+      if (confirmationInput && confirmationInput.value !== passphrase) {
+        status.textContent = 'Passphrases do not match.';
+        confirmationInput.focus();
+        return;
+      }
+      finish(passphrase);
+    });
+
+    dialog.showModal();
+    passphraseInput.focus();
+  });
+}
+
 export function setProgress(progressEl, labelEl, loaded, total) {
   if (!progressEl) return;
   progressEl.classList.remove('hidden');

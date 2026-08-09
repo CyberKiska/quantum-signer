@@ -1,10 +1,11 @@
-import { SuiteId } from '../src/formats/containers.js';
+import { SuiteId, unpackSecretKey } from '../src/formats/containers.js';
 import { generateKeypair } from '../src/crypto/algorithms.js';
 import {
   createSecretSessionManager,
   validateGeneratedKeyPair,
 } from '../src/crypto/secret-session.js';
 import { wipeBytes } from '../src/crypto/bytes.js';
+import { isProtectedSecretKeyFile } from '../src/crypto/key-protection.js';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -132,7 +133,7 @@ function testLateAccessCannotReviveExpiredSession() {
   );
 }
 
-function testInvalidExportConsentDoesNotRefreshIdleDeadline() {
+async function testInvalidExportConsentDoesNotRefreshIdleDeadline() {
   const scheduler = createFakeScheduler();
   const manager = createTestManager(scheduler);
   const summary = manager.generateSession(SuiteId.ML_DSA_44);
@@ -141,7 +142,7 @@ function testInvalidExportConsentDoesNotRefreshIdleDeadline() {
   const authorization = manager.authorizeSecretKeyExport(summary.sessionHandle);
   let rejected = false;
   try {
-    manager.exportSecretKeyFile(summary.sessionHandle, 'wrong-export-consent');
+    await manager.exportSecretKeyFile(summary.sessionHandle, 'wrong-export-consent');
   } catch (err) {
     rejected = err?.code === 'E_EXPORT_AUTH';
   }
@@ -152,18 +153,23 @@ function testInvalidExportConsentDoesNotRefreshIdleDeadline() {
   assert(typeof authorization.exportConsentToken === 'string', 'export authorization did not issue a token');
 }
 
-function testExportAuthorizationIsExpiringAndOneTime() {
+async function testExportAuthorizationIsExpiringAndOneTime() {
   const scheduler = createFakeScheduler();
   const manager = createTestManager(scheduler, 10_000, { exportAuthorizationTtlMs: 100 });
   const summary = manager.generateSession(SuiteId.ML_DSA_44);
 
   const firstGrant = manager.authorizeSecretKeyExport(summary.sessionHandle);
-  const exported = manager.exportSecretKeyFile(summary.sessionHandle, firstGrant.exportConsentToken);
+  const exported = await manager.exportSecretKeyFile(summary.sessionHandle, firstGrant.exportConsentToken, {
+    passphrase: 'correct horse battery staple',
+  });
   assert(exported instanceof Uint8Array && exported.length > 0, 'authorized secret export failed');
+  assert(isProtectedSecretKeyFile(exported), 'default secret export was not encrypted');
 
   let replayRejected = false;
   try {
-    manager.exportSecretKeyFile(summary.sessionHandle, firstGrant.exportConsentToken);
+    await manager.exportSecretKeyFile(summary.sessionHandle, firstGrant.exportConsentToken, {
+      passphrase: 'correct horse battery staple',
+    });
   } catch (err) {
     replayRejected = err?.code === 'E_EXPORT_AUTH';
   }
@@ -173,11 +179,80 @@ function testExportAuthorizationIsExpiringAndOneTime() {
   scheduler.advance(100);
   let expiredRejected = false;
   try {
-    manager.exportSecretKeyFile(summary.sessionHandle, expiringGrant.exportConsentToken);
+    await manager.exportSecretKeyFile(summary.sessionHandle, expiringGrant.exportConsentToken, {
+      passphrase: 'correct horse battery staple',
+    });
   } catch (err) {
     expiredRejected = err?.code === 'E_EXPORT_AUTH' && err?.details?.reason === 'expired';
   }
   assert(expiredRejected, 'expired export authorization was accepted');
+}
+
+async function testProtectedExportImportAndRawOptIn() {
+  const scheduler = createFakeScheduler();
+  const manager = createTestManager(scheduler, 60_000);
+  const importedManager = createTestManager(createFakeScheduler(), 60_000);
+  const summary = manager.generateSession(SuiteId.ML_DSA_44);
+  const passphrase = 'test passphrase with sufficient length';
+  let encrypted;
+  let tampered;
+  let raw;
+
+  try {
+    const encryptedGrant = manager.authorizeSecretKeyExport(summary.sessionHandle);
+    encrypted = await manager.exportSecretKeyFile(summary.sessionHandle, encryptedGrant.exportConsentToken, {
+      passphrase,
+    });
+    assert(isProtectedSecretKeyFile(encrypted), 'encrypted export has the wrong magic');
+
+    let passphraseRequired = false;
+    try {
+      await importedManager.importSecretKeyFile(encrypted);
+    } catch (err) {
+      passphraseRequired = err?.code === 'E_KEY_PASSPHRASE_REQUIRED';
+    }
+    assert(passphraseRequired, 'encrypted import did not require a passphrase');
+
+    let wrongPassphraseRejected = false;
+    try {
+      await importedManager.importSecretKeyFile(encrypted, 'wrong passphrase');
+    } catch (err) {
+      wrongPassphraseRejected = err?.code === 'E_KEY_DECRYPT_FAILED';
+    }
+    assert(wrongPassphraseRejected, 'wrong passphrase was accepted');
+
+    tampered = Uint8Array.from(encrypted);
+    tampered[tampered.length - 1] ^= 0x01;
+    let tamperRejected = false;
+    try {
+      await importedManager.importSecretKeyFile(tampered, passphrase);
+    } catch (err) {
+      tamperRejected = err?.code === 'E_KEY_DECRYPT_FAILED';
+    }
+    assert(tamperRejected, 'tampered encrypted export was accepted');
+
+    const imported = await importedManager.importSecretKeyFile(encrypted, passphrase);
+    assert(imported.fingerprintHex === summary.fingerprintHex, 'encrypted export/import changed key identity');
+    importedManager.clearSession(imported.sessionHandle);
+
+    const rawGrant = manager.authorizeSecretKeyExport(summary.sessionHandle);
+    raw = await manager.exportSecretKeyFile(summary.sessionHandle, rawGrant.exportConsentToken, {
+      rawExport: true,
+    });
+    assert(!isProtectedSecretKeyFile(raw), 'explicit raw export was unexpectedly encrypted');
+    const parsedRaw = unpackSecretKey(raw);
+    try {
+      assert(parsedRaw.suiteId === summary.suiteId, 'raw opt-in export changed suite identity');
+    } finally {
+      wipeBytes(parsedRaw.keyBytes);
+    }
+  } finally {
+    manager.clearAllSessions();
+    importedManager.clearAllSessions();
+    wipeBytes(encrypted);
+    wipeBytes(tampered);
+    wipeBytes(raw);
+  }
 }
 
 function testSessionCapacityIsBounded() {
@@ -244,8 +319,9 @@ function testGeneratedKeyPairConsistencyValidation() {
 testActivityExtendsExpiry();
 testExpiryDefersWipeDuringLease();
 testLateAccessCannotReviveExpiredSession();
-testInvalidExportConsentDoesNotRefreshIdleDeadline();
-testExportAuthorizationIsExpiringAndOneTime();
+await testInvalidExportConsentDoesNotRefreshIdleDeadline();
+await testExportAuthorizationIsExpiringAndOneTime();
+await testProtectedExportImportAndRawOptIn();
 testSessionCapacityIsBounded();
 testHasSessionEnforcesDelayedDeadlineWithoutTouching();
 testGeneratedKeyPairConsistencyValidation();

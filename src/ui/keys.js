@@ -16,6 +16,7 @@ import {
   byId,
   downloadBytes,
   readFileAsBytes,
+  requestPassphrase,
   safeFileName,
   showToast,
   workerFriendlyError,
@@ -166,6 +167,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
 
   const exportPublicBtn = byId('keys-export-public');
   const exportSecretBtn = byId('keys-export-secret');
+  const rawExportOptIn = byId('keys-export-raw-optin');
   const clearBtn = byId('keys-clear');
 
   const infoEl = byId('keys-info');
@@ -204,6 +206,11 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     exportPublicBtn.disabled = keyOperationBusy || state.keys.transitioning || !state.keys.public;
     exportSecretBtn.disabled =
       !privateKeyOperationsAllowed || keyOperationBusy || state.keys.transitioning || !state.keys.secret;
+    rawExportOptIn.disabled =
+      !privateKeyOperationsAllowed || keyOperationBusy || state.keys.transitioning || !state.keys.secret;
+    exportSecretBtn.textContent = rawExportOptIn.checked
+      ? 'Export Secret (Raw)'
+      : 'Export Secret (Encrypted)';
   }
 
   function setKeyOperationBusy(busy) {
@@ -256,6 +263,7 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   });
 
   suiteSelect.addEventListener('change', refreshSuiteWarning);
+  rawExportOptIn.addEventListener('change', updateExportButtons);
 
   generateBtn.addEventListener('click', async () => {
     if (!privateKeyOperationsAllowed) return;
@@ -339,11 +347,30 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
 
     try {
       beginKeyTransition();
-      const result = await workerClient.call(
-        'IMPORT_SECRET',
-        { secretKeyFile: file },
-        { timeoutMs: KEYGEN_TIMEOUT_MS.SLH_DSA }
-      );
+      let result;
+      try {
+        result = await workerClient.call(
+          'IMPORT_SECRET',
+          { secretKeyFile: file },
+          { timeoutMs: KEYGEN_TIMEOUT_MS.SLH_DSA }
+        );
+      } catch (err) {
+        if (err?.code !== 'E_KEY_PASSPHRASE_REQUIRED') throw err;
+        let passphrase = await requestPassphrase({
+          title: 'Unlock encrypted private key',
+          description: 'Enter the passphrase used when this private key was exported.',
+        });
+        if (passphrase === null) return;
+        try {
+          result = await workerClient.call(
+            'IMPORT_SECRET',
+            { secretKeyFile: file, passphrase },
+            { timeoutMs: KEYGEN_TIMEOUT_MS.SLH_DSA }
+          );
+        } finally {
+          passphrase = null;
+        }
+      }
       const parsedPublic = unpackPublicKey(result.publicKeyFile);
 
       if (state.keys.public) {
@@ -382,12 +409,23 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
     if (!privateKeyOperationsAllowed) return;
     if (keyOperationBusy) return;
     if (!state.keys.secret) return;
-    if (
-      !confirm(
-        'Exporting writes an unencrypted .pqsk private-key file. Anyone with this file can create signatures as this key. Continue?'
-      )
-    ) {
-      return;
+    const rawExport = rawExportOptIn.checked;
+    let passphrase = null;
+    if (rawExport) {
+      if (
+        !confirm(
+          'DANGER: Export an unencrypted raw private key? Anyone who obtains the file can sign as this identity. ' +
+            'The file may be copied by browser history, backups, synchronization, or malware.'
+        )
+      ) return;
+    } else {
+      passphrase = await requestPassphrase({
+        title: 'Encrypt private-key export',
+        description:
+          'The private-key file will be protected with PBKDF2-HMAC-SHA-512 and AES-256-GCM. Store the passphrase separately; it cannot be recovered.',
+        confirmPassphrase: true,
+      });
+      if (passphrase === null) return;
     }
     let secretKeyFile = null;
     const exportingSession = state.keys.secret;
@@ -403,12 +441,16 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
         {
           secretSessionHandle: exportingSession.sessionHandle,
           exportConsentToken: authorization.exportConsentToken,
+          passphrase,
+          rawExport,
         },
         { timeoutMs: SECRET_SESSION_TIMEOUT_MS }
       );
       secretKeyFile = result.secretKeyFile;
       const name = safeFileName(
-        `${getSuiteName(exportingSession.suiteId)}-${exportingSession.fingerprintShort}.pqsk`
+        `${getSuiteName(exportingSession.suiteId)}-${exportingSession.fingerprintShort}${
+          rawExport ? '.raw' : '.encrypted'
+        }.pqsk`
       );
       downloadBytes(name, secretKeyFile);
       // Yield once so the browser can begin its download/save UI before the
@@ -426,13 +468,15 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
         !activeSessionStillMatches
           ? 'Private-key download was requested, but the in-memory session expired before export could be confirmed'
           : exportConfirmed
-          ? 'Private-key export confirmed by user'
+          ? `${rawExport ? 'Raw' : 'Encrypted'} private-key export confirmed by user`
           : 'Private-key download was requested but remains marked unexported'
       );
     } catch (err) {
       showToast('error', workerFriendlyError(err));
     } finally {
       if (secretKeyFile) wipeBytes(secretKeyFile);
+      passphrase = null;
+      if (rawExport) rawExportOptIn.checked = false;
       setKeyOperationBusy(false);
     }
   });

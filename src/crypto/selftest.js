@@ -1661,27 +1661,29 @@ function buildCases(suites) {
   });
 
   cases.push({
-    name: 'secret session export must round-trip',
+    name: 'encrypted secret session export must round-trip',
     fn: async () => {
       const manager = createSecretSessionManager();
+      const importedManager = createSecretSessionManager();
       const session = manager.generateSession(SuiteId.ML_DSA_65);
       const authorization = manager.authorizeSecretKeyExport(session.sessionHandle);
-      const exported = manager.exportSecretKeyFile(
+      const exported = await manager.exportSecretKeyFile(
         session.sessionHandle,
-        authorization.exportConsentToken
+        authorization.exportConsentToken,
+        { passphrase: 'self-test private key passphrase' }
       );
-      const parsedSecret = unpackSecretKey(exported);
-      const parsedPublic = unpackPublicKey(session.publicKeyFile);
-      const derivedPublic = getPublicKeyFromSecret(parsedSecret.suiteId, parsedSecret.keyBytes);
+      const imported = await importedManager.importSecretKeyFile(
+        exported,
+        'self-test private key passphrase'
+      );
+      const sameSuite = imported.suiteId === session.suiteId;
+      const sameFingerprint = imported.fingerprintHex === session.fingerprintHex;
 
-      const sameSuite = parsedSecret.suiteId === parsedPublic.suiteId;
-      const samePublic = bytesToHexLower(derivedPublic) === bytesToHexLower(parsedPublic.keyBytes);
-
-      wipeBytes(parsedSecret.keyBytes);
-      wipeBytes(derivedPublic);
+      wipeBytes(exported);
       manager.clearAllSessions();
+      importedManager.clearAllSessions();
 
-      if (!sameSuite || !samePublic) {
+      if (!sameSuite || !sameFingerprint) {
         throw new Error('exported secret key did not round-trip to stored public key');
       }
     },
@@ -1695,7 +1697,7 @@ function buildCases(suites) {
       const manager = createSecretSessionManager();
       let importedPublic;
       try {
-        const imported = manager.importSecretKeyFile(secretKeyFile);
+        const imported = await manager.importSecretKeyFile(secretKeyFile);
         importedPublic = unpackPublicKey(imported.publicKeyFile);
         if (bytesToHexLower(importedPublic.keyBytes) !== bytesToHexLower(keys.publicKey)) {
           throw new Error('import PCT returned an unexpected ML-DSA public key');
@@ -1718,7 +1720,7 @@ function buildCases(suites) {
       manager.authorizeSecretKeyExport(session.sessionHandle);
       let failed = false;
       try {
-        manager.exportSecretKeyFile(session.sessionHandle);
+        await manager.exportSecretKeyFile(session.sessionHandle);
       } catch (err) {
         failed = err?.code === ErrorCode.E_EXPORT_AUTH && err?.details?.reason === 'missing';
       }
@@ -1739,7 +1741,7 @@ function buildCases(suites) {
       manager.authorizeSecretKeyExport(session.sessionHandle);
       let failed = false;
       try {
-        manager.exportSecretKeyFile(session.sessionHandle, 'export-consent-wrong');
+        await manager.exportSecretKeyFile(session.sessionHandle, 'export-consent-wrong');
       } catch (err) {
         failed = err?.code === ErrorCode.E_EXPORT_AUTH && err?.details?.reason === 'mismatch';
       }
@@ -1836,7 +1838,7 @@ function buildCases(suites) {
       const manager = createSecretSessionManager();
       let rejected = false;
       try {
-        manager.importSecretKeyFile(secretKeyFile);
+        await manager.importSecretKeyFile(secretKeyFile);
       } catch (err) {
         rejected = err?.code === ErrorCode.E_KEY_CONSISTENCY;
       } finally {
@@ -1864,7 +1866,7 @@ function buildCases(suites) {
         const manager = createSecretSessionManager();
         let rejected = false;
         try {
-          manager.importSecretKeyFile(secretKeyFile);
+          await manager.importSecretKeyFile(secretKeyFile);
         } catch (err) {
           rejected = err?.code === ErrorCode.E_KEY_CONSISTENCY;
         } finally {
