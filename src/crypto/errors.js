@@ -38,7 +38,7 @@ const MESSAGES = {
   [ErrorCode.E_SUITE_UNSUPPORTED]: 'Unsupported cryptographic suite.',
   [ErrorCode.E_HASH_UNSUPPORTED]: 'Unsupported hash algorithm.',
   [ErrorCode.E_KEY_SUITE_MISMATCH]: 'Key suite does not match signature suite.',
-  [ErrorCode.E_KEY_CONSISTENCY]: 'Imported private key failed pairwise consistency validation.',
+  [ErrorCode.E_KEY_CONSISTENCY]: 'Private key failed pairwise consistency validation.',
   [ErrorCode.E_SESSION_LIMIT]: 'Secret-session capacity reached; clear an existing session and retry.',
   [ErrorCode.E_SESSION_MISSING]: 'Secret session not found or already cleared.',
   [ErrorCode.E_EXPORT_AUTH]: 'Secret export authorization failed.',
@@ -73,13 +73,15 @@ export function normalizeError(err, locale = 'en') {
   if (err instanceof AppError) {
     return {
       code: err.code,
-      message: err.message || toErrorMessage(err.code, locale),
-      details: err.details || null,
+      // Only return catalogued messages across the worker boundary. Custom or
+      // dependency-provided exception text can disclose internal state.
+      message: toErrorMessage(err.code, locale),
+      details: err.code === ErrorCode.E_INTERNAL ? null : err.details || null,
     };
   }
   return {
     code: ErrorCode.E_INTERNAL,
-    message: err?.message || toErrorMessage(ErrorCode.E_INTERNAL, locale),
+    message: toErrorMessage(ErrorCode.E_INTERNAL, locale),
     details: null,
   };
 }

@@ -4,7 +4,7 @@ import {
   safeReviewText,
 } from '../src/ui/common.js';
 import { resolveSignInputKind } from '../src/core/sign-input.js';
-import { ErrorCode } from '../src/crypto/errors.js';
+import { ErrorCode, createError, normalizeError } from '../src/crypto/errors.js';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -119,5 +119,16 @@ try {
   missingError = error;
 }
 assert(missingError?.code === ErrorCode.E_INPUT_REQUIRED, 'missing sign input returned the wrong error');
+
+const unexpectedError = normalizeError(new Error('secret dependency state'));
+assert(unexpectedError.code === ErrorCode.E_INTERNAL, 'unexpected error was not normalized as internal');
+assert(unexpectedError.message === 'Internal error.', 'unexpected exception text crossed the worker boundary');
+assert(unexpectedError.details === null, 'unexpected exception details crossed the worker boundary');
+
+const internalAppError = normalizeError(
+  createError(ErrorCode.E_INTERNAL, { reason: 'sensitive_internal_reason' }, 'en', 'sensitive override')
+);
+assert(internalAppError.message === 'Internal error.', 'internal AppError override crossed the worker boundary');
+assert(internalAppError.details === null, 'internal AppError details crossed the worker boundary');
 
 console.log('P0 display-integrity and sign-protocol tests: PASS');

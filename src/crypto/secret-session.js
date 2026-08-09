@@ -4,9 +4,10 @@ import {
   computeFingerprintHex,
   generateKeypair,
   getPublicKeyFromSecret,
+  getSuite,
   signBytesVerified,
 } from './algorithms.js';
-import { wipeBytes } from './bytes.js';
+import { equalsBytes, wipeBytes } from './bytes.js';
 import { ErrorCode, createError } from './errors.js';
 import { MAX_KEY_FILE_BYTES, assertBytesLimit } from './policy.js';
 import { utf8ToBytesStrict } from './text-encoding.js';
@@ -14,6 +15,8 @@ import { packPublicKey, packSecretKey, unpackSecretKey } from '../formats/contai
 
 const IMPORT_PCT_CONTEXT = 'quantum-signer/private-key-import-pct/v1';
 const IMPORT_PCT_MESSAGE = 'quantum-signer/expanded-private-key-import-check/v1';
+const GENERATION_PCT_CONTEXT = 'quantum-signer/private-key-generation-pct/v1';
+const GENERATION_PCT_MESSAGE = 'quantum-signer/private-key-generation-check/v1';
 
 function cloneBytes(bytes) {
   return Uint8Array.from(bytes);
@@ -63,6 +66,60 @@ function validateImportedSecretKeyPair(suiteId, secretKey) {
   } finally {
     wipeBytes(signature);
     wipeBytes(derivedPublicKey);
+    wipeBytes(temporarySecretKey);
+    wipeBytes(message);
+    wipeBytes(contextBytes);
+  }
+}
+
+export function validateGeneratedKeyPair(suiteId, secretKey, publicKey) {
+  let temporarySecretKey;
+  let temporaryPublicKey;
+  let derivedPublicKey;
+  let signature;
+  let message;
+  let contextBytes;
+  let stage = 'derive_public_key';
+
+  try {
+    const suite = getSuite(suiteId);
+    assertKeyLength(suiteId, secretKey, 'secret');
+    assertKeyLength(suiteId, publicKey, 'public');
+    temporarySecretKey = cloneBytes(secretKey);
+    temporaryPublicKey = cloneBytes(publicKey);
+    derivedPublicKey = getPublicKeyFromSecret(suiteId, temporarySecretKey);
+    if (!equalsBytes(derivedPublicKey, temporaryPublicKey)) {
+      throw createError(ErrorCode.E_KEY_CONSISTENCY, { reason: 'generated_public_key_mismatch' });
+    }
+
+    // FIPS 204 key generation requires a sign/verify pairwise consistency
+    // test. For SLH-DSA, SP 800-208/CMVP guidance permits checking the public
+    // key material embedded in the secret key; the full derived-key comparison
+    // above checks both PK.seed and PK.root without an expensive signature.
+    if (suite.family !== 'SLH-DSA') {
+      stage = 'pairwise_consistency_test';
+      message = utf8ToBytesStrict(`${GENERATION_PCT_MESSAGE}/suite-${suiteId}`, 'generationPctMessage');
+      contextBytes = utf8ToBytesStrict(GENERATION_PCT_CONTEXT, 'generationPctContext');
+      signature = signBytesVerified({
+        suiteId,
+        message,
+        secretKey: temporarySecretKey,
+        publicKey: temporaryPublicKey,
+        hedged: false,
+        contextBytes,
+      });
+    }
+  } catch (err) {
+    throw createError(ErrorCode.E_KEY_CONSISTENCY, {
+      reason: 'private_key_generation_pct_failed',
+      suiteId,
+      stage,
+      causeCode: typeof err?.code === 'string' ? err.code : undefined,
+    });
+  } finally {
+    wipeBytes(signature);
+    wipeBytes(derivedPublicKey);
+    wipeBytes(temporaryPublicKey);
     wipeBytes(temporarySecretKey);
     wipeBytes(message);
     wipeBytes(contextBytes);
@@ -289,6 +346,7 @@ export function createSecretSessionManager({
       assertSessionCapacity();
       const keys = generateKeypair(suiteId);
       try {
+        validateGeneratedKeyPair(suiteId, keys.secretKey, keys.publicKey);
         return createSession({
           suiteId,
           secretKey: keys.secretKey,

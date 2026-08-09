@@ -1,5 +1,10 @@
 import { SuiteId } from '../src/formats/containers.js';
-import { createSecretSessionManager } from '../src/crypto/secret-session.js';
+import { generateKeypair } from '../src/crypto/algorithms.js';
+import {
+  createSecretSessionManager,
+  validateGeneratedKeyPair,
+} from '../src/crypto/secret-session.js';
+import { wipeBytes } from '../src/crypto/bytes.js';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -211,6 +216,31 @@ function testHasSessionEnforcesDelayedDeadlineWithoutTouching() {
   );
 }
 
+function testGeneratedKeyPairConsistencyValidation() {
+  for (const suiteId of [SuiteId.ML_DSA_44, SuiteId.SLH_DSA_SHAKE_128S]) {
+    const keys = generateKeypair(suiteId);
+    const corruptedPublicKey = Uint8Array.from(keys.publicKey);
+    corruptedPublicKey[corruptedPublicKey.length - 1] ^= 0x01;
+    try {
+      validateGeneratedKeyPair(suiteId, keys.secretKey, keys.publicKey);
+
+      let rejected = false;
+      try {
+        validateGeneratedKeyPair(suiteId, keys.secretKey, corruptedPublicKey);
+      } catch (err) {
+        rejected =
+          err?.code === 'E_KEY_CONSISTENCY' &&
+          err?.details?.reason === 'private_key_generation_pct_failed';
+      }
+      assert(rejected, `generated-key PCT accepted an inconsistent suite ${suiteId} key pair`);
+    } finally {
+      wipeBytes(corruptedPublicKey);
+      wipeBytes(keys.secretKey);
+      wipeBytes(keys.publicKey);
+    }
+  }
+}
+
 testActivityExtendsExpiry();
 testExpiryDefersWipeDuringLease();
 testLateAccessCannotReviveExpiredSession();
@@ -218,4 +248,5 @@ testInvalidExportConsentDoesNotRefreshIdleDeadline();
 testExportAuthorizationIsExpiringAndOneTime();
 testSessionCapacityIsBounded();
 testHasSessionEnforcesDelayedDeadlineWithoutTouching();
+testGeneratedKeyPairConsistencyValidation();
 console.log('Secret-session lifecycle tests: PASS');

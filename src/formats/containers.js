@@ -266,10 +266,18 @@ function normalizeIso8601(value) {
     if (!Number.isFinite(seconds)) {
       throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid_epoch' });
     }
-    return new Date(Math.trunc(seconds) * 1000).toISOString();
+    try {
+      return new Date(Math.trunc(seconds) * 1000).toISOString();
+    } catch (_err) {
+      throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid_epoch' });
+    }
   }
   if (value instanceof Date) {
-    return value.toISOString();
+    try {
+      return value.toISOString();
+    } catch (_err) {
+      throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid' });
+    }
   }
   throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid_type' });
 }

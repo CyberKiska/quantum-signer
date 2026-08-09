@@ -1385,6 +1385,21 @@ function buildCases(suites) {
   });
 
   cases.push({
+    name: 'out-of-range createdAt values must be contained as application errors',
+    fn: async () => {
+      for (const createdAt of [Number.MAX_VALUE, new Date(Number.NaN)]) {
+        let failed = false;
+        try {
+          normalizeMetadata({ createdAt });
+        } catch (err) {
+          failed = err?.code === 'E_FORMAT_TLV' && err?.details?.field === 'createdAt';
+        }
+        if (!failed) throw new Error('out-of-range createdAt escaped validation or exposed a native error');
+      }
+    },
+  });
+
+  cases.push({
     name: 'metadataToPlain must reject unsafe u64 filesize conversion',
     fn: async () => {
       const safe = metadataToPlain({ filesize: BigInt(Number.MAX_SAFE_INTEGER) });
