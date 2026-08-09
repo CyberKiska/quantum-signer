@@ -7,18 +7,16 @@ Static client-only web app for post-quantum detached signatures (`.qsig`) using 
 > **Security status:** experimental and not approved for high-assurance production signing.
 > The pure-JavaScript ML-DSA/SLH-DSA engine is algorithm-compatible but not strictly
 > FIPS-conformant, FIPS 140-3 validated, side-channel hardened, or backed by an application-visible
-> approved RBG. Do not use long-lived or high-value private keys without resolving the blockers in
-> [PRODUCTION-READINESS.md](./PRODUCTION-READINESS.md).
+> approved RBG. Do not use long-lived or high-value private keys without a separate security review.
 
 [Features](#features) | [Architecture](#architecture) | [Development](#development) |
-[Production readiness](./PRODUCTION-READINESS.md) | [Security policy](./SECURITY.md) |
-[QSIG v2 draft](./QSIG-V2.md) | [License](#license)
+[License](#license)
 
 ------------
 
 ## Features
 
-1. Key management: generate/import/export key pairs for ML-DSA, SLH-DSA, and experimental Falcon.
+1. Key management: generate/import/export key pairs for ML-DSA and SLH-DSA.
 2. Sign: select a file or text, review SHA3-512 payload digest and active signer, create detached signature, download `.qsig`.
 3. Verify: review original input digest and declared `.qsig` metadata before verification; get
    `VALID`/`UNTRUSTED`/`INVALID` with separate primitive, signer-binding, and payload-match results.
@@ -37,7 +35,6 @@ Supported algorithm-compatible suites:
 
 - ML-DSA-44 / 65 / 87 (FIPS 204 family; default pure-context profile)
 - SLH-DSA-SHAKE-128s / 192s / 256s (FIPS 205 family; default pure-context profile)
-- Falcon-512-padded / Falcon-1024-padded (experimental Falcon Round 3 support; not FN-DSA, not FIPS 206, and expected to be incompatible with final FN-DSA/FIPS 206)
 
 Hashing:
 
@@ -61,7 +58,6 @@ Important limitations:
   interoperability profiles include RFC 9814, RFC 9881, RFC 9882, RFC 9909, and RFC 9964, but
   their bytes and context rules must not be conflated with QSIG.
 - ML-DSA and SLH-DSA domain separation is carried through the standardized algorithm `context` parameter, and signer metadata is authenticated explicitly.
-- Falcon uses the `PQ_DETACHED_EXTERNAL_CONTEXT_V2` profile because the current noble Falcon API does not support the standardized `context` option. Quantum Signer signs `QSCX || wrapper-version || ctxLen || ctxBytes || TBS` for Falcon only. Treat this as an experimental interoperability boundary, not a NIST-standard Falcon/FN-DSA profile.
 
 ### Security model
 
@@ -81,9 +77,8 @@ Important limitations:
 - Detached signature format is versioned and parsed defensively.
 - Signing holds a worker-side session lease and self-verifies every generated signature before any `.qsig` output is returned.
 - Imported expanded private keys must pass a sign/verify pairwise-consistency test before a
-  session or public key is exposed. ML-DSA and SLH-DSA use deterministic signing for this check;
-  experimental Falcon uses its suite-default randomized signing behavior. This checks functional
-  consistency, not provenance.
+  session or public key is exposed. ML-DSA and SLH-DSA use deterministic signing for this check.
+  This checks functional consistency, not provenance.
 - Worker-held private-key sessions expire after 30 minutes without activity. Expiry denies new
   operations immediately and defers best-effort wiping only for an already-active lease.
 - Sign and verify results are bound to immutable review snapshots; stale asynchronous completions are discarded.
@@ -93,7 +88,7 @@ Important limitations:
 
 Container includes:
 - `magic` + `version`
-- `suite id` (ML-DSA / SLH-DSA parameter set, or experimental Falcon parameter set)
+- `suite id` (ML-DSA / SLH-DSA parameter set)
 - `signature profile id`
 - `payload digest alg id` (`SHA3-512`)
 - `payload digest`
@@ -170,7 +165,7 @@ Covers:
 - private-key session lease and idle-expiry behavior
 - malformed container parse rejection
 
-Full mode (extra SLH suites and Falcon-1024):
+Full mode (extra SLH-DSA suites):
 
 ```bash
 FULL_SELFTEST=1 npm run selftest
