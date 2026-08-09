@@ -1,6 +1,12 @@
-import { QSIG_DEFAULT_CTX, getDefaultSignatureProfileId } from '../crypto/algorithms.js';
 import { wipeBytes } from '../crypto/bytes.js';
-import { AuthDigestAlgId, HashAlgId, getHashName, getSuiteName } from '../formats/containers.js';
+import {
+  AuthDigestAlgId,
+  HashAlgId,
+  QSIG_V2_CONTEXT,
+  SignatureProfileId,
+  getHashName,
+  getSuiteName,
+} from '../formats/containers.js';
 import { createOperationGate } from '../core/operation-gate.js';
 import {
   byId,
@@ -333,10 +339,10 @@ export function setupSignTab(state, workerClient) {
       hashHex: previewState.hashHex,
       inputLength: previewState.inputLength,
       suiteId: secretEntry.suiteId,
-      signatureProfileId: getDefaultSignatureProfileId(secretEntry.suiteId),
+      signatureProfileId: SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
       hashAlgId: HashAlgId.SHA3_512,
       authDigestAlgId: AuthDigestAlgId.SHA3_256,
-      context: QSIG_DEFAULT_CTX,
+      context: QSIG_V2_CONTEXT,
       signerFingerprintHex: secretEntry.fingerprintHex,
       secretSessionHandle: secretEntry.sessionHandle,
     };

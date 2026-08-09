@@ -1,8 +1,5 @@
-import {
-  assertKeyLength,
-  computeFingerprint,
-  computeFingerprintHex,
-} from '../crypto/algorithms.js';
+import { computeFingerprint, computeFingerprintHex } from '../crypto/fingerprint.js';
+import { assertKeyLength } from '../crypto/suite-metadata.js';
 import { equalsBytes, wipeBytes } from '../crypto/bytes.js';
 import {
   getSuiteName,
@@ -24,13 +21,11 @@ import {
 
 const KEYGEN_TIMEOUT_MS = Object.freeze({
   ML_DSA: 60_000,
-  FALCON: 180_000,
   SLH_DSA: 300_000,
 });
 const SECRET_SESSION_TIMEOUT_MS = 360_000;
 
 const SLH_WARNING_TEXT = 'SLH-DSA generation is computationally intensive. It may take several minutes on mobile devices.';
-const FALCON_WARNING_TEXT = 'Experimental: Falcon support uses Round 3 padded signatures, not FN-DSA / FIPS-206, and may be incompatible with final FN-DSA.';
 
 function formatKeyInfo(state) {
   const lines = [];
@@ -79,7 +74,7 @@ function createPublicEntry(parsed, { exported = true } = {}) {
     suiteId: parsed.suiteId,
     keyBytes,
     fileBytes: packPublicKey({ suiteId: parsed.suiteId, keyBytes }),
-    fingerprintShort: computeFingerprint(keyBytes, 8),
+    fingerprintShort: computeFingerprint(keyBytes, 16),
     fingerprintHex: computeFingerprintHex(keyBytes),
     exported,
   };
@@ -184,14 +179,12 @@ export function setupKeysTab(state, workerClient, suites, defaultSuiteId) {
   function getSuiteWarningText(suiteId) {
     const family = getSuiteFamily(suiteId);
     if (family === 'SLH-DSA') return SLH_WARNING_TEXT;
-    if (family === 'Falcon') return FALCON_WARNING_TEXT;
     return '';
   }
 
   function getKeygenTimeoutMs(suiteId) {
     const family = getSuiteFamily(suiteId);
     if (family === 'SLH-DSA') return KEYGEN_TIMEOUT_MS.SLH_DSA;
-    if (family === 'Falcon') return KEYGEN_TIMEOUT_MS.FALCON;
     return KEYGEN_TIMEOUT_MS.ML_DSA;
   }
 

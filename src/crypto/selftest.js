@@ -2,7 +2,6 @@ import {
   QSIG_DEFAULT_CTX,
   assertSignatureLength,
   bytesToHexLower,
-  computeFingerprintBytes,
   getDefaultSignatureProfileId,
   generateKeypair,
   getPublicKeyFromSecret,
@@ -12,6 +11,7 @@ import {
   signBytes,
   verifyBytes,
 } from './algorithms.js';
+import { computeFingerprintBytes } from './fingerprint.js';
 import {
   MAX_CONTEXT_BYTES,
   MAX_PAYLOAD_FILE_BYTES,
@@ -62,13 +62,11 @@ const QUICK_TEST_SUITES = [
   SuiteId.ML_DSA_65,
   SuiteId.ML_DSA_87,
   SuiteId.SLH_DSA_SHAKE_128S,
-  SuiteId.FALCON_512_PADDED,
 ];
 
 const FULL_EXTRA_SUITES = [
   SuiteId.SLH_DSA_SHAKE_192S,
   SuiteId.SLH_DSA_SHAKE_256S,
-  SuiteId.FALCON_1024_PADDED,
 ];
 
 function textBytes(value) {
@@ -805,11 +803,11 @@ function buildCases(suites) {
   });
 
   cases.push({
-    name: 'Falcon-512-padded: non-standard stored .qsig context must fail parse',
+    name: 'non-standard stored .qsig context must fail parse',
     fn: async () => {
-      const suiteId = SuiteId.FALCON_512_PADDED;
+      const suiteId = SuiteId.ML_DSA_44;
       const keys = generateKeypair(suiteId);
-      const payload = textBytes('falcon-stored-context-check');
+      const payload = textBytes('stored-context-check');
       const { sigFile } = buildSignatureContainer({
         suiteId,
         payloadBytes: payload,
@@ -840,11 +838,11 @@ function buildCases(suites) {
   });
 
   cases.push({
-    name: 'profile downgrade must fail parse',
+    name: 'unsupported signature profile must fail parse',
     fn: async () => {
-      const suiteId = SuiteId.FALCON_512_PADDED;
+      const suiteId = SuiteId.ML_DSA_44;
       const keys = generateKeypair(suiteId);
-      const payload = textBytes('profile-downgrade-check');
+      const payload = textBytes('unsupported-profile-check');
       const { sigFile } = buildSignatureContainer({
         suiteId,
         payloadBytes: payload,
@@ -853,7 +851,7 @@ function buildCases(suites) {
       });
 
       const tampered = Uint8Array.from(sigFile);
-      tampered[QSIG_V2_SIGNATURE_PROFILE_OFFSET] = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
+      tampered[QSIG_V2_SIGNATURE_PROFILE_OFFSET] = 0x02;
 
       let failed = false;
       try {
@@ -863,7 +861,7 @@ function buildCases(suites) {
       }
 
       if (!failed) {
-        throw new Error('profile downgrade unexpectedly parsed');
+        throw new Error('unsupported signature profile unexpectedly parsed');
       }
     },
   });

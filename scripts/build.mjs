@@ -32,7 +32,7 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
   await rm(distDir, { recursive: true, force: true });
   await mkdir(assetsDir, { recursive: true });
 
-  await build({
+  const buildResult = await build({
     entryPoints: {
       app: path.join(srcDir, 'main.js'),
       worker: path.join(srcDir, 'worker.js'),
@@ -44,8 +44,31 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
     target: ['es2022'],
     sourcemap,
     minify,
+    metafile: true,
     logLevel: 'info',
   });
+
+  const outputEntries = Object.entries(buildResult.metafile.outputs);
+  const appOutput = outputEntries.find(([, output]) => output.entryPoint?.endsWith('src/main.js'));
+  const workerOutput = outputEntries.find(([, output]) => output.entryPoint?.endsWith('src/worker.js'));
+  if (!appOutput || !workerOutput) {
+    throw new Error('Build metadata is missing the app or worker entry point');
+  }
+
+  const [, appMetadata] = appOutput;
+  const [, workerMetadata] = workerOutput;
+  const forbiddenAppInputs = Object.keys(appMetadata.inputs).filter(
+    (input) => input.includes('@noble/post-quantum') || input.endsWith('src/crypto/algorithms.js')
+  );
+  if (forbiddenAppInputs.length > 0) {
+    throw new Error(`Private-key implementation leaked into the UI bundle: ${forbiddenAppInputs.join(', ')}`);
+  }
+  if (appMetadata.bytes > 128 * 1024) {
+    throw new Error(`UI bundle exceeds the 128 KiB production budget: ${appMetadata.bytes} bytes`);
+  }
+  if (workerMetadata.bytes > 256 * 1024) {
+    throw new Error(`Crypto worker exceeds the 256 KiB production budget: ${workerMetadata.bytes} bytes`);
+  }
 
   const [htmlTemplate, css] = await Promise.all([
     readFile(path.join(srcDir, 'index.html'), 'utf8'),

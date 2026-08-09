@@ -1,7 +1,7 @@
 import {
-  computeFingerprintHex,
   verifyBytes,
 } from './algorithms.js';
+import { computeFingerprintHex } from './fingerprint.js';
 import { ErrorCode } from './errors.js';
 import {
   MAX_KEY_FILE_BYTES,

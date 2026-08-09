@@ -1,15 +1,15 @@
 import {
-  DEFAULT_SUITE_ID,
   QSIG_DEFAULT_CTX,
   assertSignatureLength,
   bytesToHexLower,
-  computeFingerprintBytes,
   getDefaultSignatureProfileId,
   getSuite,
   hashBytesSHA3512,
   hashFileSHA3512,
   signBytesVerified,
 } from './crypto/algorithms.js';
+import { computeFingerprintBytes } from './crypto/fingerprint.js';
+import { DEFAULT_SUITE_ID } from './crypto/suite-metadata.js';
 import { ErrorCode, createError, normalizeError } from './crypto/errors.js';
 import {
   MAX_KEY_FILE_BYTES,

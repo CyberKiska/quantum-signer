@@ -1,12 +1,11 @@
 import {
-  assertKeyLength,
-  computeFingerprint,
-  computeFingerprintHex,
   generateKeypair,
   getPublicKeyFromSecret,
   getSuite,
   signBytesVerified,
 } from './algorithms.js';
+import { computeFingerprint, computeFingerprintHex } from './fingerprint.js';
+import { assertKeyLength } from './suite-metadata.js';
 import { equalsBytes, wipeBytes } from './bytes.js';
 import { ErrorCode, createError } from './errors.js';
 import { MAX_KEY_FILE_BYTES, assertBytesLimit } from './policy.js';
@@ -283,7 +282,7 @@ export function createSecretSessionManager({
       lastActivityAt: readNow(),
       expiryTimer: null,
       exportAuthorization: null,
-      fingerprintShort: computeFingerprint(sessionPublicKey, 8),
+      fingerprintShort: computeFingerprint(sessionPublicKey, 16),
       fingerprintHex: computeFingerprintHex(sessionPublicKey),
     };
 

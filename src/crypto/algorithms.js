@@ -1,5 +1,4 @@
-import { sha3_256, sha3_512 } from '@noble/hashes/sha3.js';
-import { falcon512padded, falcon1024padded } from '@noble/post-quantum/falcon.js';
+import { sha3_512 } from '@noble/hashes/sha3.js';
 import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import {
   slh_dsa_shake_128s,
@@ -19,7 +18,6 @@ import {
   HashAlgId,
   QSIG_V2_CONTEXT,
   SignatureProfileId,
-  SuiteId,
   buildSignedMessageV2,
 } from '../formats/containers.js';
 import {
@@ -29,10 +27,15 @@ import {
   validateSuiteId,
 } from './validate.js';
 import { bytesToHexLower, hexToBytesStrict } from '../formats/encoding.js';
-import { getSuiteWireLengths } from './suite-metadata.js';
+import {
+  DEFAULT_SLH_SUITE_ID,
+  DEFAULT_SUITE_ID,
+  SuiteId,
+  assertKeyLength as assertMetadataKeyLength,
+  getSuiteWireLengths,
+} from './suite-metadata.js';
 
-export const DEFAULT_SUITE_ID = SuiteId.ML_DSA_87;
-export const DEFAULT_SLH_SUITE_ID = SuiteId.SLH_DSA_SHAKE_128S;
+export { DEFAULT_SLH_SUITE_ID, DEFAULT_SUITE_ID };
 export const DEFAULT_HASH_ALG_ID = HashAlgId.SHA3_512;
 export const QSIG_DEFAULT_CTX = QSIG_V2_CONTEXT;
 
@@ -97,26 +100,6 @@ const SUITE_REGISTRY = new Map([
       defaultHedged: true,
     },
   ],
-  [
-    SuiteId.FALCON_512_PADDED,
-    {
-      id: SuiteId.FALCON_512_PADDED,
-      name: 'Falcon-512-padded',
-      family: 'Falcon',
-      signer: falcon512padded,
-      defaultHedged: true,
-    },
-  ],
-  [
-    SuiteId.FALCON_1024_PADDED,
-    {
-      id: SuiteId.FALCON_1024_PADDED,
-      name: 'Falcon-1024-padded',
-      family: 'Falcon',
-      signer: falcon1024padded,
-      defaultHedged: true,
-    },
-  ],
 ]);
 
 for (const [suiteId, entry] of SUITE_REGISTRY) {
@@ -155,17 +138,12 @@ export function getSuite(suiteId) {
 }
 
 export function getDefaultSignatureProfileId(suiteId) {
-  const suite = getSuite(suiteId);
-  return suite.family === 'Falcon'
-    ? SignatureProfileId.PQ_DETACHED_EXTERNAL_CONTEXT_V2
-    : SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
+  getSuite(suiteId);
+  return SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
 }
 
 function assertSignatureProfileCompatible(suite, signatureProfileId) {
-  const expectedProfileId =
-    suite.family === 'Falcon'
-      ? SignatureProfileId.PQ_DETACHED_EXTERNAL_CONTEXT_V2
-      : SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
+  const expectedProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2;
 
   assertCondition(signatureProfileId === expectedProfileId, ErrorCode.E_FORMAT_VERSION, {
     field: 'signatureProfileId',
@@ -176,17 +154,8 @@ function assertSignatureProfileCompatible(suite, signatureProfileId) {
 }
 
 export function assertKeyLength(suiteId, keyBytes, kind) {
-  const suite = getSuite(suiteId);
-  validateBytes(keyBytes, `${kind}Key`);
-  const expected = kind === 'public' ? suite.signer.lengths.publicKey : suite.signer.lengths.secretKey;
-  if (typeof expected === 'number') {
-    assertCondition(keyBytes.length === expected, ErrorCode.E_FORMAT_LENGTH, {
-      field: `${kind}KeyLength`,
-      expected,
-      actual: keyBytes.length,
-      suiteId,
-    });
-  }
+  getSuite(suiteId);
+  assertMetadataKeyLength(suiteId, keyBytes, kind);
 }
 
 export function assertSignatureLength(suiteId, signature) {
@@ -323,13 +292,6 @@ export function verifyBytes({
     }
     context = contextBytes;
   }
-  if (
-    signatureProfileId === SignatureProfileId.PQ_DETACHED_EXTERNAL_CONTEXT_V2 &&
-    (!context || context.length === 0)
-  ) {
-    return false;
-  }
-
   const signedMessage = buildSignedMessageV2({
     signatureProfileId,
     tbs: message,
@@ -392,21 +354,6 @@ export function hashHexToBytes(hashHex) {
 
 export { bytesToHexLower };
 
-export function computeFingerprintBytes(bytes) {
-  validateBytes(bytes, 'bytes');
-  return sha3_256(bytes);
-}
-
-export function computeFingerprint(bytes, size = 8) {
-  validateBytes(bytes, 'bytes');
-  const digest = computeFingerprintBytes(bytes);
-  const take = Math.max(1, Math.min(size, digest.length));
-  return bytesToHexLower(digest.subarray(0, take));
-}
-
-export function computeFingerprintHex(bytes) {
-  return bytesToHexLower(computeFingerprintBytes(bytes));
-}
 
 export function ensureHashAlg(hashAlgId) {
   validateHashAlgId(hashAlgId);

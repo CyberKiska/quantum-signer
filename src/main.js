@@ -16,7 +16,7 @@
     along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { DEFAULT_SUITE_ID, listSuites } from './crypto/algorithms.js';
+import { DEFAULT_SUITE_ID, listSuites } from './crypto/suite-metadata.js';
 import { wipeBytes } from './crypto/bytes.js';
 import { byId, createWorkerClient, getBasePath, showToast, workerFriendlyError } from './ui/common.js';
 import { setupLayout } from './ui/layout.js';
