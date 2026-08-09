@@ -118,33 +118,6 @@ function getDisplayMetadataOffsets(sigFile) {
   };
 }
 
-function getDisplayCreatedAtRecordInfo(sigFile) {
-  const { displayMetaOffset } = getDisplayMetadataOffsets(sigFile);
-  const view = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
-  const firstLen = view.getUint16(displayMetaOffset + 1, true);
-  const secondOffset = displayMetaOffset + 3 + firstLen;
-  const secondLen = view.getUint16(secondOffset + 1, true);
-  const thirdOffset = secondOffset + 3 + secondLen;
-  const thirdLen = view.getUint16(thirdOffset + 1, true);
-  return {
-    createdAtRecordOffset: thirdOffset,
-    createdAtValueOffset: thirdOffset + 3,
-    createdAtValueLen: thirdLen,
-  };
-}
-
-function getDisplayCreatedAtValueOffset(sigFile) {
-  return getDisplayCreatedAtRecordInfo(sigFile).createdAtValueOffset;
-}
-
-function writeU64LEBytes(out, offset, value) {
-  let v = BigInt(value);
-  for (let i = 0; i < 8; i += 1) {
-    out[offset + i] = Number(v & 0xffn);
-    v >>= 8n;
-  }
-}
-
 function getSecondAuthMetaRecordOffset(sigFile) {
   const { authMetaOffset } = getAuthMetadataOffsets(sigFile);
   const view = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
@@ -185,11 +158,7 @@ function buildSignatureContainer({ suiteId, payloadBytes, secretKey, publicKey, 
     signature,
     ctx: QSIG_DEFAULT_CTX,
     authenticatedMetadata,
-    displayMetadata: {
-      filename: 'self-test.txt',
-      filesize: BigInt(payloadBytes.length),
-      createdAt: '2025-01-01T00:00:00.000Z',
-    },
+    displayMetadata: {},
   });
 
   wipeBytes(authMetaBytes);
@@ -360,12 +329,11 @@ function buildCases(suites) {
   }
 
   cases.push({
-    name: 'legacy unsigned display metadata remains compatible and outside the signature TBS',
+    name: 'unsigned display metadata must be rejected on pack and parse',
     fn: async () => {
       const suiteId = SuiteId.ML_DSA_44;
       const keys = generateKeypair(suiteId);
-      const publicKeyFile = packPublicKey({ suiteId, keyBytes: keys.publicKey });
-      const payload = textBytes('legacy-display-metadata-compatibility');
+      const payload = textBytes('unsigned-display-metadata-rejection');
       const { sigFile } = buildSignatureContainer({
         suiteId,
         payloadBytes: payload,
@@ -373,36 +341,46 @@ function buildCases(suites) {
         publicKey: keys.publicKey,
       });
       const parsed = unpackSignatureV2(sigFile);
-      const alteredFilename = 'legacy.pdf\u2028Valid: YES';
-      const repacked = packSignatureV2({
-        suiteId: parsed.suiteId,
-        signatureProfileId: parsed.signatureProfileId,
-        payloadDigestAlgId: parsed.payloadDigestAlgId,
-        authDigestAlgId: parsed.authDigestAlgId,
-        payloadDigest: parsed.payloadDigest,
-        authMetaDigest: parsed.authMetaDigest,
-        signature: parsed.signature,
-        ctx: parsed.ctx,
-        authenticatedMetadata: parsed.authenticatedMetadata,
-        displayMetadata: {
-          ...parsed.displayMetadata,
-          filename: alteredFilename,
-        },
-      });
-      const reparsed = unpackSignatureV2(repacked);
-      const result = finalizeVerification(reparsed, publicKeyFile, {
-        inputKind: 'text',
-        inputLength: payload.length,
-      });
 
-      if (!equalsBytes(parsed.tbs, reparsed.tbs)) {
-        throw new Error('legacy display metadata unexpectedly changed the signature TBS');
+      let packFailed = false;
+      try {
+        packSignatureV2({
+          suiteId: parsed.suiteId,
+          signatureProfileId: parsed.signatureProfileId,
+          payloadDigestAlgId: parsed.payloadDigestAlgId,
+          authDigestAlgId: parsed.authDigestAlgId,
+          payloadDigest: parsed.payloadDigest,
+          authMetaDigest: parsed.authMetaDigest,
+          signature: parsed.signature,
+          ctx: parsed.ctx,
+          authenticatedMetadata: parsed.authenticatedMetadata,
+          displayMetadata: { filename: 'forged-name.pdf' },
+        });
+      } catch (err) {
+        packFailed =
+          err?.code === 'E_FORMAT_TLV' &&
+          err?.details?.reason === 'unsigned_display_metadata_not_supported';
       }
-      if (reparsed.displayMetadata.filename !== alteredFilename) {
-        throw new Error('legacy display metadata did not remain parse-compatible');
+
+      const { displayMetaOffset } = getDisplayMetadataOffsets(sigFile);
+      const extension = Uint8Array.of(MetadataTag.FILENAME, 0x01, 0x00, 0x78);
+      const injected = new Uint8Array(sigFile.length + extension.length);
+      injected.set(sigFile.subarray(0, displayMetaOffset), 0);
+      injected.set(extension, displayMetaOffset);
+      injected.set(sigFile.subarray(displayMetaOffset), displayMetaOffset + extension.length);
+      new DataView(injected.buffer).setUint16(QSIG_V2_DISPLAY_META_LEN_OFFSET, extension.length, true);
+
+      let parseFailed = false;
+      try {
+        unpackSignatureV2(injected);
+      } catch (err) {
+        parseFailed =
+          err?.code === 'E_FORMAT_TLV' &&
+          err?.details?.reason === 'unsigned_display_metadata_not_supported';
       }
-      if (result.valid !== true || result.trusted !== true) {
-        throw new Error('legacy display metadata broke otherwise valid trusted verification');
+
+      if (!packFailed || !parseFailed) {
+        throw new Error('unsigned display metadata was accepted');
       }
     },
   });
@@ -1273,63 +1251,6 @@ function buildCases(suites) {
   });
 
   cases.push({
-    name: 'authenticated-only tag in display metadata must fail parse',
-    fn: async () => {
-      const keys = generateKeypair(SuiteId.ML_DSA_44);
-      const payload = textBytes('display-metadata-namespace-check');
-      const { sigFile } = buildSignatureContainer({
-        suiteId: SuiteId.ML_DSA_44,
-        payloadBytes: payload,
-        secretKey: keys.secretKey,
-        publicKey: keys.publicKey,
-      });
-      const tampered = Uint8Array.from(sigFile);
-      const { createdAtRecordOffset } = getDisplayCreatedAtRecordInfo(tampered);
-      tampered[createdAtRecordOffset] = MetadataTag.SIGNER_PUBLIC_KEY;
-
-      let failed = false;
-      try {
-        unpackSignatureV2(tampered);
-      } catch (err) {
-        failed =
-          err?.code === 'E_FORMAT_TLV' &&
-          err?.details?.field === 'displayMeta' &&
-          err?.details?.reason === 'unexpected_tag';
-      }
-      if (!failed) throw new Error('authenticated-only tag unexpectedly parsed in display metadata');
-    },
-  });
-
-  cases.push({
-    name: 'non-canonical display metadata TLV order must fail parse',
-    fn: async () => {
-      const keys = generateKeypair(SuiteId.ML_DSA_87);
-      const payload = textBytes('non-canonical-display-tlv-check');
-      const { sigFile } = buildSignatureContainer({
-        suiteId: SuiteId.ML_DSA_87,
-        payloadBytes: payload,
-        secretKey: keys.secretKey,
-        publicKey: keys.publicKey,
-      });
-
-      const tampered = Uint8Array.from(sigFile);
-      const { displayMetaOffset } = getDisplayMetadataOffsets(tampered);
-      tampered[displayMetaOffset] = 0x03;
-
-      let failed = false;
-      try {
-        unpackSignatureV2(tampered);
-      } catch (err) {
-        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'non_canonical_order';
-      }
-
-      if (!failed) {
-        throw new Error('non-canonical display metadata TLV order unexpectedly parsed');
-      }
-    },
-  });
-
-  cases.push({
     name: 'unknown critical authenticated metadata tag must fail parse',
     fn: async () => {
       const keys = generateKeypair(SuiteId.ML_DSA_87);
@@ -1359,33 +1280,30 @@ function buildCases(suites) {
   });
 
   cases.push({
-    name: 'unknown non-critical display metadata tag must be ignored',
+    name: 'unknown non-critical authenticated metadata tag must fail parse',
     fn: async () => {
       const keys = generateKeypair(SuiteId.ML_DSA_44);
-      const payload = textBytes('unknown-noncritical-tag-check');
+      const payload = textBytes('unknown-noncritical-auth-tag-check');
       const { sigFile } = buildSignatureContainer({
         suiteId: SuiteId.ML_DSA_44,
         payloadBytes: payload,
         secretKey: keys.secretKey,
         publicKey: keys.publicKey,
       });
-      const { displayMetaOffset, displayMetaLen } = getDisplayMetadataOffsets(sigFile);
-      const insertOffset = displayMetaOffset + displayMetaLen;
-      const extension = Uint8Array.of(0x04, 0x01, 0x00, 0x42);
-      const extended = new Uint8Array(sigFile.length + extension.length);
-      extended.set(sigFile.subarray(0, insertOffset), 0);
-      extended.set(extension, insertOffset);
-      extended.set(sigFile.subarray(insertOffset), insertOffset + extension.length);
-      new DataView(extended.buffer).setUint16(
-        QSIG_V2_DISPLAY_META_LEN_OFFSET,
-        displayMetaLen + extension.length,
-        true
-      );
+      const tampered = Uint8Array.from(sigFile);
+      const secondRecordOffset = getSecondAuthMetaRecordOffset(tampered);
+      tampered[secondRecordOffset] = 0x12;
 
-      const parsed = unpackSignatureV2(extended);
-      if (parsed.displayMetadata.filename !== 'self-test.txt') {
-        throw new Error('known display metadata changed while ignoring non-critical extension');
+      let failed = false;
+      try {
+        unpackSignatureV2(tampered);
+      } catch (err) {
+        failed =
+          err?.code === 'E_FORMAT_TLV' &&
+          err?.details?.field === 'authMeta' &&
+          err?.details?.reason === 'unexpected_tag';
       }
+      if (!failed) throw new Error('unknown non-critical auth metadata tag unexpectedly parsed');
     },
   });
 
@@ -1414,73 +1332,6 @@ function buildCases(suites) {
 
       if (!failed) {
         throw new Error('unsupported fingerprint alg unexpectedly parsed');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'empty display filename must fail parse',
-    fn: async () => {
-      const keys = generateKeypair(SuiteId.ML_DSA_44);
-      const payload = textBytes('empty-display-filename-check');
-      const { sigFile } = buildSignatureContainer({
-        suiteId: SuiteId.ML_DSA_44,
-        payloadBytes: payload,
-        secretKey: keys.secretKey,
-        publicKey: keys.publicKey,
-      });
-
-      const { displayMetaOffset, displayMetaLen } = getDisplayMetadataOffsets(sigFile);
-      const sourceView = new DataView(sigFile.buffer, sigFile.byteOffset, sigFile.byteLength);
-      const filenameLen = sourceView.getUint16(displayMetaOffset + 1, true);
-      const filenameValueOffset = displayMetaOffset + 3;
-      const filenameValueEnd = filenameValueOffset + filenameLen;
-      const tampered = new Uint8Array(sigFile.length - filenameLen);
-      tampered.set(sigFile.subarray(0, filenameValueOffset), 0);
-      tampered.set(sigFile.subarray(filenameValueEnd), filenameValueOffset);
-      const tamperedView = new DataView(tampered.buffer, tampered.byteOffset, tampered.byteLength);
-      tamperedView.setUint16(displayMetaOffset + 1, 0, true);
-      tamperedView.setUint16(QSIG_V2_DISPLAY_META_LEN_OFFSET, displayMetaLen - filenameLen, true);
-
-      let failed = false;
-      try {
-        unpackSignatureV2(tampered);
-      } catch (err) {
-        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'filename_empty';
-      }
-      if (!failed) throw new Error('empty display filename unexpectedly parsed');
-    },
-  });
-
-  cases.push({
-    name: 'invalid UTF-8 in display filename must fail parse',
-    fn: async () => {
-      const keys = generateKeypair(SuiteId.ML_DSA_87);
-      const payload = textBytes('invalid-display-utf8-check');
-      const { sigFile } = buildSignatureContainer({
-        suiteId: SuiteId.ML_DSA_87,
-        payloadBytes: payload,
-        secretKey: keys.secretKey,
-        publicKey: keys.publicKey,
-      });
-
-      const tampered = Uint8Array.from(sigFile);
-      const { displayMetaOffset, displayMetaLen } = getDisplayMetadataOffsets(tampered);
-      if (displayMetaLen < 5) {
-        throw new Error('display metadata is unexpectedly too short for UTF-8 test');
-      }
-      tampered[displayMetaOffset + 3] = 0xc3;
-      tampered[displayMetaOffset + 4] = 0x28;
-
-      let failed = false;
-      try {
-        unpackSignatureV2(tampered);
-      } catch (err) {
-        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'invalid_utf8';
-      }
-
-      if (!failed) {
-        throw new Error('invalid UTF-8 in display filename unexpectedly parsed');
       }
     },
   });
@@ -1529,85 +1380,6 @@ function buildCases(suites) {
       }
       if (!failed) {
         throw new Error('non-canonical createdAt unexpectedly normalized');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'non-canonical createdAt in display metadata must fail parse',
-    fn: async () => {
-      const keys = generateKeypair(SuiteId.ML_DSA_87);
-      const payload = textBytes('invalid-created-at-format-check');
-      const { sigFile } = buildSignatureContainer({
-        suiteId: SuiteId.ML_DSA_87,
-        payloadBytes: payload,
-        secretKey: keys.secretKey,
-        publicKey: keys.publicKey,
-      });
-
-      const tampered = Uint8Array.from(sigFile);
-      const createdAtOffset = getDisplayCreatedAtValueOffset(tampered);
-      tampered[createdAtOffset + 10] = 0x20;
-
-      let failed = false;
-      try {
-        unpackSignatureV2(tampered);
-      } catch (err) {
-        failed =
-          err?.code === 'E_FORMAT_TLV' &&
-          (err?.details?.reason === 'createdAt_invalid_iso8601' || err?.details?.reason === 'invalid_utf8');
-      }
-
-      if (!failed) {
-        throw new Error('non-canonical createdAt unexpectedly parsed');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'binary epoch createdAt in display metadata must fail parse',
-    fn: async () => {
-      const keys = generateKeypair(SuiteId.ML_DSA_87);
-      const payload = textBytes('binary-created-at-check');
-      const { sigFile } = buildSignatureContainer({
-        suiteId: SuiteId.ML_DSA_87,
-        payloadBytes: payload,
-        secretKey: keys.secretKey,
-        publicKey: keys.publicKey,
-      });
-
-      const { displayMetaLen } = getDisplayMetadataOffsets(sigFile);
-      const {
-        createdAtRecordOffset,
-        createdAtValueOffset,
-        createdAtValueLen,
-      } = getDisplayCreatedAtRecordInfo(sigFile);
-      if (createdAtValueLen <= 8) {
-        throw new Error('createdAt value is unexpectedly too short for binary epoch test');
-      }
-
-      const shrink = createdAtValueLen - 8;
-      const createdAtValueEnd = createdAtValueOffset + createdAtValueLen;
-      const tampered = new Uint8Array(sigFile.length - shrink);
-      tampered.set(sigFile.subarray(0, createdAtValueOffset), 0);
-      tampered.set(sigFile.subarray(createdAtValueEnd), createdAtValueOffset + 8);
-
-      const view = new DataView(tampered.buffer, tampered.byteOffset, tampered.byteLength);
-      view.setUint16(QSIG_V2_DISPLAY_META_LEN_OFFSET, displayMetaLen - shrink, true);
-      view.setUint16(createdAtRecordOffset + 1, 8, true);
-      writeU64LEBytes(tampered, createdAtValueOffset, 1735689600n);
-
-      let failed = false;
-      try {
-        unpackSignatureV2(tampered);
-      } catch (err) {
-        failed =
-          err?.code === 'E_FORMAT_TLV' &&
-          (err?.details?.reason === 'createdAt_invalid_iso8601' || err?.details?.reason === 'invalid_utf8');
-      }
-
-      if (!failed) {
-        throw new Error('binary epoch createdAt unexpectedly parsed');
       }
     },
   });

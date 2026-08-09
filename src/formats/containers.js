@@ -108,13 +108,11 @@ const DISPLAY_METADATA_TAGS = new Set([
   MetadataTag.FILESIZE,
   MetadataTag.CREATED_AT,
 ]);
-const KNOWN_METADATA_TAGS = new Set(Object.values(MetadataTag));
-
-const KNOWN_SIG_FLAGS =
-  SigFlags.CTX_PRESENT |
-  SigFlags.FILENAME_PRESENT |
-  SigFlags.FILESIZE_PRESENT |
-  SigFlags.CREATED_AT_PRESENT;
+// QSIG v2 previously reserved flags and a length-delimited area for display
+// metadata. Those bytes are outside the signed TBS, so accepting them would let
+// an attacker relabel an otherwise valid signature. Keep the exported flag
+// values reserved for wire-format diagnostics, but accept only CTX_PRESENT.
+const KNOWN_SIG_FLAGS = SigFlags.CTX_PRESENT;
 
 const U32_MAX = 0xffffffff;
 const U16_MAX = 0xffff;
@@ -461,14 +459,6 @@ function ensureOnlyAllowedTags(records, allowedTags, field) {
   }
 }
 
-function ensureKnownTagsInNamespace(records, allowedTags, field) {
-  for (const { tag } of records) {
-    if (KNOWN_METADATA_TAGS.has(tag) && !allowedTags.has(tag)) {
-      throw createError(ErrorCode.E_FORMAT_TLV, { field, reason: 'unexpected_tag', tag });
-    }
-  }
-}
-
 export function packAuthenticatedMetadataV2(metadata = {}) {
   const authMetadata = {
     signerPublicKey: metadata.signerPublicKey,
@@ -510,7 +500,10 @@ function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDi
   ensureLength(expectedDigest, AUTH_META_DIGEST_LENGTH, ErrorCode.E_FORMAT_TLV, 'authMetaDigest');
 
   const records = decodeTLVBlock(authMetaBytes);
-  ensureKnownTagsInNamespace(records, AUTH_METADATA_TAGS, 'authMeta');
+  // Authenticated metadata is closed-world in v2. Silently ignoring a new tag
+  // would let different implementations assign different meaning to the same
+  // authenticated bytes.
+  ensureOnlyAllowedTags(records, AUTH_METADATA_TAGS, 'authMeta');
   const metadata = parseMetadata(records);
   if (!(metadata.signerPublicKey instanceof Uint8Array) || !(metadata.signerFingerprint instanceof Uint8Array)) {
     throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMeta', reason: 'missing_signer_binding' });
@@ -522,13 +515,6 @@ function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDi
   }
 
   return metadata;
-}
-
-function parseDisplayMetadataV2(displayMetaBytes) {
-  assertBytesLimit(displayMetaBytes, MAX_DISPLAY_METADATA_BYTES, 'displayMetaBytes', ErrorCode.E_FORMAT_LENGTH);
-  const records = decodeTLVBlock(displayMetaBytes);
-  ensureKnownTagsInNamespace(records, DISPLAY_METADATA_TAGS, 'displayMeta');
-  return parseMetadata(records);
 }
 
 function parseCreatedAtValue(value) {
@@ -590,20 +576,6 @@ function parseMetadata(records) {
   }
 
   return metadata;
-}
-
-function metadataFlags(metadata = {}) {
-  let flags = 0;
-  if (metadata.filename !== undefined && metadata.filename !== null && metadata.filename !== '') {
-    flags |= SigFlags.FILENAME_PRESENT;
-  }
-  if (metadata.filesize !== undefined && metadata.filesize !== null) {
-    flags |= SigFlags.FILESIZE_PRESENT;
-  }
-  if (metadata.createdAt !== undefined && metadata.createdAt !== null) {
-    flags |= SigFlags.CREATED_AT_PRESENT;
-  }
-  return flags;
 }
 
 export function buildTBSV2({
@@ -739,6 +711,12 @@ export function packSignatureV2({
   }
 
   const displayMetaBytes = packDisplayMetadataV2(displayMetadata);
+  if (displayMetaBytes.length !== 0) {
+    throw createError(ErrorCode.E_FORMAT_TLV, {
+      field: 'displayMeta',
+      reason: 'unsigned_display_metadata_not_supported',
+    });
+  }
   assertMaxLength(authMetaBytes.length, MAX_AUTH_METADATA_BYTES, 'authMetaLen', ErrorCode.E_FORMAT_LENGTH);
   assertMaxLength(displayMetaBytes.length, MAX_DISPLAY_METADATA_BYTES, 'displayMetaLen', ErrorCode.E_FORMAT_LENGTH);
   assertMaxLength(signature.length, MAX_SIGNATURE_BYTES, 'sigLen', ErrorCode.E_FORMAT_LENGTH);
@@ -746,8 +724,7 @@ export function packSignatureV2({
   ensureU16(displayMetaBytes.length, 'displayMetaLen');
   ensureU32(signature.length, 'sigLen');
 
-  let flags = metadataFlags(displayMetadata);
-  flags |= SigFlags.CTX_PRESENT;
+  const flags = SigFlags.CTX_PRESENT;
 
   const headerLen = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + AUTH_META_DIGEST_LENGTH + 1 + 1 + 2 + 2 + 4;
   const totalLen = headerLen + ctxBytes.length + authMetaBytes.length + displayMetaBytes.length + signature.length;
@@ -843,6 +820,13 @@ export function unpackSignatureV2(sigBytes) {
 
   const authMetaLen = reader.u16(ErrorCode.E_FORMAT_TLV);
   const displayMetaLen = reader.u16(ErrorCode.E_FORMAT_TLV);
+  if (displayMetaLen !== 0) {
+    throw createError(ErrorCode.E_FORMAT_TLV, {
+      field: 'displayMeta',
+      reason: 'unsigned_display_metadata_not_supported',
+      displayMetaLen,
+    });
+  }
   const sigLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
   assertMaxLength(authMetaLen, MAX_AUTH_METADATA_BYTES, 'authMetaLen', ErrorCode.E_FORMAT_LENGTH);
   assertMaxLength(displayMetaLen, MAX_DISPLAY_METADATA_BYTES, 'displayMetaLen', ErrorCode.E_FORMAT_LENGTH);
@@ -878,24 +862,11 @@ export function unpackSignatureV2(sigBytes) {
   }
 
   const authenticatedMetadata = parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, authMetaDigest);
-  const displayMetadata = parseDisplayMetadataV2(displayMetaBytes);
+  const displayMetadata = {};
   const wireLengths = getSuiteWireLengths(suiteId);
   ensureLength(authenticatedMetadata.signerPublicKey, wireLengths.publicKey, ErrorCode.E_FORMAT_LENGTH, 'signerPublicKey');
   ensureLength(signature, wireLengths.signature, ErrorCode.E_FORMAT_LENGTH, 'signature');
   const metadata = { ...displayMetadata, ...authenticatedMetadata };
-
-  const hasFilename = displayMetadata.filename !== undefined;
-  const hasFilesize = displayMetadata.filesize !== undefined;
-  const hasCreatedAt = displayMetadata.createdAt !== undefined;
-  if (((flags & SigFlags.FILENAME_PRESENT) !== 0) !== hasFilename) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'filename', flags });
-  }
-  if (((flags & SigFlags.FILESIZE_PRESENT) !== 0) !== hasFilesize) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'filesize', flags });
-  }
-  if (((flags & SigFlags.CREATED_AT_PRESENT) !== 0) !== hasCreatedAt) {
-    throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'createdAt', flags });
-  }
 
   const tbs = buildTBSV2({
     formatVerMajor: versionMajor,
