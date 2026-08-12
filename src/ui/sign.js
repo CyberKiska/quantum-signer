@@ -162,7 +162,7 @@ export function setupSignTab(state, workerClient) {
       },
       {
         title: 'Signature parameters',
-        rows: [{ label: 'Context', value: QSIG_DEFAULT_CTX }],
+        rows: [{ label: 'Context', value: QSIG_V2_CONTEXT }],
       },
       {
         title: 'Active signing key',
