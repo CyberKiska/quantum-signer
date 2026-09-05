@@ -12,7 +12,7 @@ export const DOCUMENT_CSP = [
   "object-src 'none'",
   "script-src 'self'",
   "style-src 'self'",
-  "worker-src 'self'",
+  "worker-src blob:",
 ].join('; ');
 
 // frame-ancestors is intentionally omitted from the meta policy because

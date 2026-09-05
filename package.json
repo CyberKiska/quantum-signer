@@ -19,10 +19,11 @@
     "test:worker": "node scripts/worker-client-test.mjs",
     "test:build-config": "node scripts/build-config-test.mjs",
     "test:mutation-corpus": "node scripts/container-mutation-test.mjs",
-    "selftest": "npm run test:headers && npm run test:build-config && npm run test:p0-security && npm run test:session && npm run test:worker && npm run test:mutation-corpus && node scripts/selftest.mjs",
-    "check": "npm run selftest && npm run test:local-headers && npm run build",
+    "selftest": "npm run test:headers && npm run test:build-config && npm run test:p0-security && npm run test:session && npm run test:worker && npm run test:mutation-corpus && npm run test:browser-boundary && node scripts/selftest.mjs",
+    "check": "npm run selftest && npm run test:native && npm run test:local-headers && npm run build",
     "test:native": "node scripts/native-crypto-test.mjs",
-    "signer": "node src/native/cli.mjs"
+    "signer": "node src/native/cli.mjs",
+    "test:browser-boundary": "node scripts/browser-boundary-test.mjs"
   },
   "dependencies": {
     "@noble/hashes": "2.3.0",

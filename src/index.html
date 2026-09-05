@@ -37,7 +37,7 @@
         <div>
           <div class="header-group">
             <h1>Quantum Signer</h1>
-            <p class="subtitle">Experimental browser PQ<br />detached signatures</p>
+            <p class="subtitle">Post-quantum signature<br />verification</p>
           </div>
 
           <nav class="nav-menu" role="tablist" aria-label="Primary">
@@ -60,15 +60,15 @@
             <span id="ctx-pub-fp" class="context-val">Not Loaded</span>
           </div>
           <div class="context-row">
-            <span>Secret Key</span>
-            <span id="ctx-sec-fp" class="context-val">Not Loaded</span>
+            <span>Signing</span>
+            <span id="ctx-sec-fp" class="context-val">Local CLI</span>
           </div>
           <button id="sidebar-selftest" class="sidebar-selftest" type="button">Run Self-test</button>
           <div class="sidebar-note">
             Memory-only session.<br />
             No network calls.<br />
             Not FIPS validated.<br />
-            Avoid high-value keys.<br />
+            Public keys only.<br />
             <a href="https://github.com/CyberKiska/quantum-signer" target="_blank" rel="noopener noreferrer">Source code</a>
             <br />Build: <span class="build-id" title="%BUILD_COMMIT%">%BUILD_COMMIT_SHORT%</span>
           </div>
@@ -78,124 +78,40 @@
       <main class="main-content">
         <div id="toast-container" class="toast-container"></div>
         <div id="delivery-warning" class="delivery-warning hidden" role="status">
-          Private-key operations are disabled for this delivery. Use the loopback production
-          preview with its verified CSP and isolation headers for signing or key management.
+          This browser verifies signatures. Use the local command line tool in the Sign tab to generate keys and sign files.
         </div>
 
         <section id="tab-keys" class="tab-panel module-panel module-keys active">
-          <header class="section-header">
-            <h2>Key Management</h2>
-          </header>
-
+          <header class="section-header"><h2>Verification Key</h2></header>
           <div class="panel-grid">
-            <div class="card">
-              <h3>Generate New Keypair</h3>
-              <p class="muted-copy">
-                Create a new cryptographic identity in memory.
-                <br /><strong>Warning:</strong> This will overwrite any currently loaded keys.
-              </p>
-
-              <div class="form-group">
-                <label for="keys-suite">Algorithm Suite</label>
-                <select id="keys-suite"></select>
-                <p id="keys-suite-warning" class="hint-warning hidden"></p>
-              </div>
-
-              <div class="button-group">
-                <button id="keys-generate" class="primary" type="button">Generate Keypair</button>
-              </div>
-            </div>
-
-            <div class="card">
-              <h3>Import Existing Keys</h3>
-              <p class="muted-copy">Load keys from local filesystem.</p>
-
+            <div class="card full-width">
+              <h3>Select a trusted public key</h3>
+              <p class="muted-copy">Obtain the public key or its full fingerprint from the signer through a trusted channel.</p>
               <div class="form-group">
                 <label for="keys-import-public">Public Key (.pqpk)</label>
                 <input id="keys-import-public" type="file" accept=".pqpk" />
               </div>
-
-              <div class="form-group">
-                <label for="keys-import-secret">Secret Key (.pqsk)</label>
-                <input id="keys-import-secret" type="file" accept=".pqsk" />
+              <div class="button-group">
+                <button id="keys-export-public" class="secondary" type="button" disabled>Export Public</button>
+                <button id="keys-clear" class="secondary" type="button">Clear Key</button>
               </div>
-            </div>
-
-            <div class="card full-width">
-              <div class="card-head">
-                <h3>Active Key Session</h3>
-                <div class="button-group compact no-margin">
-                  <button id="keys-export-public" class="secondary" type="button" disabled>Export Public</button>
-                  <button id="keys-export-secret" class="secondary" type="button" disabled>Export Secret (Encrypted)</button>
-                  <button id="keys-clear" class="danger" type="button">End Session</button>
-                </div>
-              </div>
-
-              <div class="raw-export-optin">
-                <label class="checkbox-inline danger-copy" for="keys-export-raw-optin">
-                  <input id="keys-export-raw-optin" type="checkbox" />
-                  Enable unencrypted raw private-key export
-                </label>
-                <p class="muted-copy">
-                  Advanced compatibility option. Raw files provide no confidentiality if copied, synced, backed up, or stolen.
-                </p>
-              </div>
-
-              <div id="keys-info" class="mono-box keys-info-box">No keys loaded in active memory.</div>
+              <div id="keys-info" class="mono-box keys-info-box">No public key selected.</div>
             </div>
           </div>
         </section>
 
         <section id="tab-sign" class="tab-panel module-panel module-sign">
-          <header class="section-header">
-            <h2>Create Detached Signature (.qsig)</h2>
-            <p class="muted-copy">Flow: choose file/text -> sign -> inspect result -> download.</p>
-          </header>
-
-          <div class="panel-grid">
-            <div class="card full-width sign-card">
-              <div class="form-group">
-                <label>Input Type</label>
-                <div class="radio-row">
-                  <label class="radio-inline"><input id="sign-mode-file" type="radio" name="sign-input-mode" value="file" checked /> File</label>
-                  <label class="radio-inline"><input id="sign-mode-text" type="radio" name="sign-input-mode" value="text" /> Plain Text</label>
-                </div>
-              </div>
-
-              <div id="sign-file-group" class="form-group">
-                <label for="sign-file">File to Sign</label>
-                <input id="sign-file" type="file" />
-              </div>
-
-              <div id="sign-text-group" class="form-group hidden">
-                <div class="row-between">
-                  <label for="sign-text" class="no-bottom">Plain Text to Sign</label>
-                  <button id="sign-text-paste" class="secondary small" type="button">Paste</button>
-                </div>
-                <textarea id="sign-text" rows="8" placeholder="Paste text here"></textarea>
-              </div>
-
-              <div class="review-panel" aria-live="polite">
-                <div class="review-head">
-                  <h3>Review Before Signing</h3>
-                  <span id="sign-review-badge" class="badge neutral">WAITING</span>
-                </div>
-                <p class="muted-copy review-copy">SHA3-512 is computed before signing. Check the digest and active signer.</p>
-                <div id="sign-review" class="mono-box review-box">Select input to compute payload digest.</div>
-              </div>
-
-              <div class="button-group compact">
-                <button id="sign-execute" class="primary" type="button" disabled>Create Detached Signature (.qsig)</button>
-                <button id="sign-reset" class="secondary" type="button">Reset</button>
-                <button id="sign-download" class="primary" type="button" disabled>Download .qsig</button>
-              </div>
-
-              <progress id="sign-progress" value="0" max="100" class="hidden hash-progress"></progress>
-              <div id="sign-progress-label" class="progress-label"></div>
-
-              <div id="sign-result" class="mono-box sign-result">No signature generated yet.</div>
-            </div>
-          </div>
+          <header class="section-header"><h2>Sign Locally</h2></header>
+          <div class="panel-grid"><div class="card full-width">
+            <p>Generate keys and sign files with the local Node.js 26+ command line tool. Private keys and passphrases stay out of this browser.</p>
+            <p>From your verified copy of the source repository:</p>
+            <pre class="mono-box">node src/native/cli.mjs keygen --secret signer.pqse --public signer.pqpk
+node src/native/cli.mjs hash --file document.bin
+node src/native/cli.mjs sign --secret signer.pqse --file document.bin --expect-sha3-512 REVIEWED_DIGEST --out document.qsig</pre>
+            <p>Replace REVIEWED_DIGEST with the SHA3-512 digest you reviewed. Passwords are prompted without echo. Existing files are never overwritten.</p>
+            <p>Use <code>node src/native/cli.mjs help</code> for all options. Keep the encrypted .pqse key backed up securely; share only .pqpk and .qsig files.</p>
+            <p class="muted-copy">Local signing uses Node's OpenSSL provider. This project has not established FIPS module validation. Authenticate the downloaded source or release before using it.</p>
+          </div></div>
         </section>
 
         <section id="tab-verify" class="tab-panel module-panel module-verify">

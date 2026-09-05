@@ -1,3 +1,4 @@
+// Regression-only legacy browser session implementation; excluded from production bundles.
 import {
   generateKeypair,
   getPublicKeyFromSecret,
