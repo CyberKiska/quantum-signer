@@ -166,7 +166,7 @@ export async function encryptSecretKeyFile({
       suiteId,
       keyFormat,
       iterations,
-      ciphertextLength: secretKeyFile.length + GCM_TAG_LENGTH_BYTES,
+      ciphertextLength: plaintext.length + GCM_TAG_LENGTH_BYTES,
     });
     aad = concatBytes(header, salt, iv);
     const aesKey = await deriveAesKey(cryptoApi, passphraseBytes, salt, iterations, ['encrypt']);
@@ -177,7 +177,7 @@ export async function encryptSecretKeyFile({
         plaintext
       )
     );
-    if (ciphertext.length !== secretKeyFile.length + GCM_TAG_LENGTH_BYTES) {
+    if (ciphertext.length !== plaintext.length + GCM_TAG_LENGTH_BYTES) {
       throw createError(ErrorCode.E_INTERNAL, { reason: 'unexpected_aes_gcm_length' });
     }
     return concatBytes(aad, ciphertext);

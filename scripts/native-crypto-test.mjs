@@ -37,6 +37,8 @@ for (const suite of listSuites()) {
     assert.equal(decrypted.keyFormat, 'pkcs8');
     assert.deepEqual(Buffer.from(decrypted.secretKeyFile), original);
     const restored = importPkcs8(suite.id, decrypted.secretKeyFile);
+    assert.throws(() => importPkcs8(suite.id, Buffer.concat([decrypted.secretKeyFile, Buffer.from([0])])));
+    assert.throws(() => importPkcs8(suite.id, decrypted.secretKeyFile.subarray(0, decrypted.secretKeyFile.length - 1)));
     checkPrivateKey(suite.id, restored);
     assert.deepEqual(publicKeyBytes(suite.id, restored), publicKey);
     assert.throws(() => importPkcs8(suite.id === 1 ? 2 : 1, decrypted.secretKeyFile));

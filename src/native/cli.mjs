@@ -110,6 +110,7 @@ async function password(fd, confirm = false) {
   const rl = createInterface({ input: process.stdin, output: silent, terminal: true });
   const abort = new AbortController();
   rl.on('SIGINT', () => abort.abort());
+  rl.on('close', () => abort.abort());
   try {
     process.stderr.write('Passphrase: ');
     const first = await rl.question('', { signal: abort.signal });

@@ -56,6 +56,19 @@ export function importLegacySecretKey(suiteId, bytes) {
 
 export function importPkcs8(suiteId, bytes) {
   assertBytesLimit(bytes, MAX_KEY_FILE_BYTES, 'PKCS8');
+  // OpenSSL may accept a valid DER object followed by ignored bytes. Require
+  // one complete, minimally length-encoded outer SEQUENCE before decoding.
+  if (bytes[0] !== 0x30 || bytes.length < 2) throw new Error('Invalid PKCS#8 sequence.');
+  let offset = 2;
+  let length = bytes[1];
+  if (length >= 128) {
+    const count = length & 127;
+    if (count < 1 || count > 2 || bytes.length < 2 + count || bytes[2] === 0) throw new Error('Invalid DER length.');
+    length = 0;
+    for (let i = 0; i < count; i++) length = length * 256 + bytes[offset++];
+    if (length < 128) throw new Error('Noncanonical DER length.');
+  }
+  if (offset + length !== bytes.length) throw new Error('Truncated or trailing PKCS#8 data.');
   const key = createPrivateKey({ key: bytes, format: 'der', type: 'pkcs8' });
   assertNativeKey(suiteId, key, 'private');
   return key;
