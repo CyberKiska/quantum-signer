@@ -1,4 +1,3 @@
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { utf8ToBytesStrict } from '../crypto/text-encoding.js';
 
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -26,7 +25,7 @@ export function bytesToUtf8(bytes) {
 
 export function bytesToHexLower(bytes) {
   ensureBytes(bytes, 'bytes');
-  return bytesToHex(bytes).toLowerCase();
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 export function hexToBytesStrict(value) {
@@ -35,7 +34,7 @@ export function hexToBytesStrict(value) {
   if (!/^[0-9a-fA-F]*$/.test(normalized) || normalized.length % 2 !== 0) {
     throw new TypeError('invalid hex string');
   }
-  return hexToBytes(normalized);
+  return Uint8Array.from({ length: normalized.length / 2 }, (_, i) => Number.parseInt(normalized.slice(i * 2, i * 2 + 2), 16));
 }
 
 export function bytesToBase64(bytes) {

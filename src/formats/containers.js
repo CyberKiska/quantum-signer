@@ -1,4 +1,4 @@
-import { sha3_256 } from '@noble/hashes/sha3.js';
+import { sha3_256 } from '#crypto/hashes';
 import { ErrorCode, createError } from '../crypto/errors.js';
 import { equalsBytes, wipeBytes } from '../crypto/bytes.js';
 import { normalizeCanonicalUtcIso8601 } from '../crypto/time.js';

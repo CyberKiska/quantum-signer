@@ -1,6 +1,6 @@
 import {
   verifyBytes,
-} from './algorithms.js';
+} from '#crypto/verification';
 import { computeFingerprintHex } from './fingerprint.js';
 import { ErrorCode } from './errors.js';
 import {
