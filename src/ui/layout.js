@@ -44,14 +44,14 @@ export function setupLayout(state) {
       secKeyFpEl.title = 'Secret key loaded in worker session';
       setContextTone(secKeyFpEl, 'warning');
     } else {
-      secKeyFpEl.textContent = 'Not Loaded';
+      secKeyFpEl.textContent = 'Local CLI';
       secKeyFpEl.title = '';
       setContextTone(secKeyFpEl, 'muted');
     }
 
     if (!state.privateKeyOperationsAllowed) {
-      statusDot.className = 'status-indicator danger';
-      statusText.textContent = state.deliveryIsolated ? 'Verify-Only Demo' : 'Headers Missing';
+      statusDot.className = 'status-indicator secure';
+      statusText.textContent = 'Verification Only';
       return;
     }
 

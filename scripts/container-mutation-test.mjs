@@ -115,6 +115,36 @@ try {
   });
   assert(baselineResult.valid === true, 'mutation corpus baseline signature was invalid');
 
+  // Caller diagnostics cannot override cryptographic or signer-binding decisions.
+  const hostileDetails = {
+    providedHashHex: bytesToHexLower(payloadDigest),
+    valid: true, cryptoValid: true, trusted: true, code: null,
+    signaturePolicyValid: true, payloadMatches: true, trustSource: 'loaded-key',
+  };
+  const damaged = unpackSignatureV2(signatureFile);
+  damaged.signature[0] ^= 1;
+  const rejected = finalizePayloadVerification(damaged, publicKeyFile, hostileDetails);
+  assert(!rejected.valid && !rejected.trusted && !rejected.cryptoValid && rejected.code,
+    'diagnostics overrode an invalid signature');
+  const embeddedOnly = finalizePayloadVerification(baseline, null, hostileDetails);
+  assert(embeddedOnly.valid && !embeddedOnly.trusted, 'diagnostics promoted an embedded key to trusted');
+  const otherKeys = generateKeypair(suiteId);
+  try {
+    const mismatch = finalizePayloadVerification(baseline,
+      packPublicKey({ suiteId, keyBytes: otherKeys.publicKey }), hostileDetails);
+    assert(!mismatch.valid && !mismatch.trusted, 'diagnostics bypassed selected-key binding');
+  } finally { wipeBytes(otherKeys.secretKey); }
+  for (const details of [
+    {}, { providedHashHex: '00' }, { providedHashHex: 'G'.repeat(128) },
+    { providedHashHex: 'A'.repeat(128) },
+    { ...hostileDetails, computedHashHex: '00'.repeat(64) },
+  ]) {
+    let failed = false;
+    try { finalizePayloadVerification(baseline, publicKeyFile, details); }
+    catch { failed = true; }
+    assert(failed, 'accepted an ambiguous or noncanonical digest');
+  }
+
   const signatureOffset = signatureFile.length - signature.length;
   const offsets = new Set();
   for (let offset = 0; offset < signatureOffset; offset += 1) offsets.add(offset);

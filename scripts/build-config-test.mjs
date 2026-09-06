@@ -1,4 +1,4 @@
-import { normalizeBasePath, normalizeBuildCommit } from './build.mjs';
+import { normalizeBasePath, normalizeBuildCommit, normalizePrivateKeyOperations } from './build.mjs';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -41,6 +41,14 @@ for (const invalid of ['main', 'ABCDEF', '0123', '0'.repeat(65)]) {
     rejected = true;
   }
   assert(rejected, `unsafe BUILD_COMMIT was accepted: ${invalid}`);
+}
+
+assert(normalizePrivateKeyOperations() === 'disabled', 'default browser must be verification-only');
+assert(normalizePrivateKeyOperations('disabled') === 'disabled', 'verification-only profile rejected');
+for (const profile of ['enabled', 'true', 'experimental']) {
+  let rejected = false;
+  try { normalizePrivateKeyOperations(profile); } catch { rejected = true; }
+  assert(rejected, 'private-enabled browser build was accepted');
 }
 
 console.log('Build configuration validation tests: PASS');

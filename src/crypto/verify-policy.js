@@ -1,6 +1,6 @@
 import {
   verifyBytes,
-} from './algorithms.js';
+} from '#crypto/verification';
 import { computeFingerprintHex } from './fingerprint.js';
 import { ErrorCode } from './errors.js';
 import {
@@ -27,6 +27,9 @@ export function getSignatureMetadataFingerprintHex(parsedSig) {
 }
 
 function resolveVerificationCandidates(parsedSig, publicKeyFile) {
+  if (publicKeyFile != null && !(publicKeyFile instanceof Uint8Array)) {
+    throw new TypeError('publicKeyFile must be bytes or absent');
+  }
   const embeddedKey =
     parsedSig.metadata?.signerPublicKey instanceof Uint8Array && parsedSig.metadata.signerPublicKey.length > 0
       ? parsedSig.metadata.signerPublicKey
@@ -89,7 +92,35 @@ function mismatchWarning(loadedValid, embeddedValid) {
   return 'Loaded and embedded public keys differ and both fail verification.';
 }
 
+// Diagnostics must never supply decisions such as valid, trusted, or code.
+function sanitizeHashDetails(details = {}) {
+  const out = {};
+  if (details.inputKind !== undefined) {
+    if (!['file', 'text'].includes(details.inputKind)) throw new TypeError('Invalid inputKind');
+    out.inputKind = details.inputKind;
+  }
+  if (details.inputLength !== undefined) {
+    if (!Number.isSafeInteger(details.inputLength) || details.inputLength < 0) {
+      throw new TypeError('Invalid inputLength');
+    }
+    out.inputLength = details.inputLength;
+  }
+  for (const name of ['computedHashHex', 'providedHashHex']) {
+    if (details[name] !== undefined) {
+      if (typeof details[name] !== 'string' || !/^[0-9a-f]{128}$/u.test(details[name])) {
+        throw new TypeError(`${name} must be a canonical SHA3-512 digest`);
+      }
+      out[name] = details[name];
+    }
+  }
+  if (out.computedHashHex !== undefined && out.providedHashHex !== undefined) {
+    throw new TypeError('Only one payload digest may be supplied');
+  }
+  return out;
+}
+
 export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
+  hashDetails = sanitizeHashDetails(hashDetails);
   const candidates = resolveVerificationCandidates(parsedSig, publicKeyFile);
 
   if (!candidates.loaded && !candidates.embedded) {
@@ -202,6 +233,7 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
  * preserves the distinction between primitive verification and final policy.
  */
 export function finalizePayloadVerification(parsedSig, publicKeyFile, hashDetails) {
+  hashDetails = sanitizeHashDetails(hashDetails);
   const actualHashHex = hashDetails?.computedHashHex || hashDetails?.providedHashHex || null;
   if (typeof actualHashHex !== 'string') {
     throw new TypeError('hashDetails must include computedHashHex or providedHashHex');

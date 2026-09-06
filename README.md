@@ -1,215 +1,75 @@
 # Quantum Signer
 
-## Digital signature tool
+Post-quantum detached signatures with a native Node/OpenSSL signing CLI and a verification-only browser application.
 
-Static client-only web app for post-quantum detached signatures (`.qsig`) using pure HTML/CSS/JS.
+**Version: 2.0.1.** Signing runs locally through Node/OpenSSL; the browser is verification-only. The project does not claim FIPS module validation or independent security certification. See [release verification](docs/RELEASE.md) for authenticating downloaded artifacts.
 
-> **Security status:** experimental and not approved for high-assurance production signing.
-> The pure-JavaScript ML-DSA/SLH-DSA engine is algorithm-compatible but not strictly
-> FIPS-conformant, FIPS 140-3 validated, side-channel hardened, or backed by an application-visible
-> approved RBG. Do not use long-lived or high-value private keys without a separate security review.
+## Signing locally
 
-[Features](#features) | [Architecture](#architecture) | [Development](#development) |
-[License](#license)
+Use Node.js 26 or newer with ML-DSA and SLH-DSA support. From an authenticated source checkout:
 
-------------
+```sh
+node src/native/cli.mjs doctor
+node src/native/cli.mjs keygen --secret signer.pqse --public signer.pqpk
+node src/native/cli.mjs hash --file document.bin
+node src/native/cli.mjs sign --secret signer.pqse --file document.bin --expect-sha3-512 REVIEWED_DIGEST --out document.qsig
+node src/native/cli.mjs verify --file document.bin --signature document.qsig --public signer.pqpk
+```
 
-## Features
+Replace `REVIEWED_DIGEST` with the exact SHA3-512 digest reviewed from the hash command. Passwords are prompted without echo. Automation can use `--passphrase-fd N`; never put passwords in command arguments. New passwords require at least 12 code points. Use a strong, unique password and secure backups.
 
-1. Key management: generate/import/export key pairs for ML-DSA and SLH-DSA.
-2. Sign: select a file or text, review SHA3-512 payload digest and active signer, create detached signature, download `.qsig`.
-3. Verify: review original input digest and declared `.qsig` metadata before verification; get
-   `VALID`/`UNTRUSTED`/`INVALID` with separate primitive, signer-binding, and payload-match results.
+New private keys are PKCS#8 encrypted inside PQSE 2 using PBKDF2-HMAC-SHA-512 (600,000 iterations) and AES-256-GCM. Older PQSE 1 and raw PQSK keys can be imported by the CLI. New key files require the new CLI; QSIG signature compatibility is preserved. Outputs are exclusive and mode 0600. Use a private output directory and appropriate Windows ACLs.
 
-Trust states are intentionally distinct: verification with a user-supplied public key may be shown as `VALID`; verification using only the key embedded in `.qsig` is shown as `UNTRUSTED` even when the cryptographic signature is internally consistent.
-If loaded and embedded signer keys differ, container policy hard-fails even when a raw primitive
-check succeeds with one of them.
+Use `--suite ML-DSA-44`, `ML-DSA-65`, `ML-DSA-87` (default), `SLH-DSA-SHAKE-128s`, `SLH-DSA-SHAKE-192s`, or `SLH-DSA-SHAKE-256s` with `keygen`. Recover a public key with:
 
-------------
+```sh
+node src/native/cli.mjs public --secret signer.pqse --out signer.pqpk
+```
 
-## Architecture
+The source CLI needs no third-party runtime cryptography. Signing, key generation, verification and SHA-3 use `node:crypto`; password protection uses standard Web Crypto. Private operations use native KeyObjects, pairwise key checks, and signature/container self-verification. There is no JavaScript signing fallback.
 
-### Algorithms and standards alignment
+## Browser verification
 
-Supported algorithm-compatible suites:
-
-- ML-DSA-44 / 65 / 87 (FIPS 204 family; default pure-context profile)
-- SLH-DSA-SHAKE-128s / 192s / 256s (FIPS 205 family; default pure-context profile)
-
-Hashing:
-
-- SHA3-512 payload digest (FIPS 202) for detached-content binding inside the current signed TBS payload.
-
-Important limitations:
-
-- The pinned pure-JavaScript PQ implementation uses ECMAScript `Number` arithmetic. Because
-  FIPS 204 section 3.6.4 and FIPS 205 section 3.1 prohibit floating-point arithmetic, this is an
-  algorithm-compatible integration, not a strict FIPS implementation-conformance claim.
-- The pinned PQ package states that it is self-audited, not independently audited, and has no
-  side-channel protection. Browser JIT, garbage collection, and hidden copies prevent reliable
-  constant-time and zeroization guarantees.
-- PQ key generation and hedged signing ultimately use `crypto.getRandomValues()`. The browser
-  does not expose the SP 800-90A/B/C evidence needed for an approved-RBG or entropy-validation
-  claim.
-- QSIG v2 does not use KMAC or cSHAKE. KMAC has no legitimate role without a secret MAC key;
-  cSHAKE remains a possible typed-hash choice for a future breaking format.
-- `qsig v2` uses a project-specific detached-signature container around standard ML-DSA / SLH-DSA signing.
-- `.qsig`, `.pqpk`, and `.pqsk` are custom encodings, not X.509, CMS, JOSE, or COSE. Relevant
-  interoperability profiles include RFC 9814, RFC 9881, RFC 9882, RFC 9909, and RFC 9964, but
-  their bytes and context rules must not be conflated with QSIG.
-- ML-DSA and SLH-DSA domain separation is carried through the standardized algorithm `context` parameter, and signer metadata is authenticated explicitly.
-
-### Security model
-
-- `no network`: no runtime fetch/XHR/WebSocket/analytics/CDN.
-- `offline-capable`: after a reviewed build is available locally, the app needs no runtime network
-  access. Browser behavior for direct `file:` module workers varies; localhost or a dedicated
-  secure static origin is the supported execution model.
-- `keys stay in browser`: public key data lives in UI session; private signing key bytes are isolated in a dedicated worker session with no server round-trips.
-  This worker boundary is a defense against accidental UI-layer exposure and routine app bugs, not against same-origin code execution.
-- `zero-trust delivery still applies`: if the page origin is compromised by XSS, an injected same-origin script, a malicious browser extension, or a tampered build, that code runs with the same origin privileges as the app and can still drive export flows or exfiltrate secrets.
-- `deployment headers are required`: the hosting layer must serve CSP for both the document and worker, including `frame-ancestors 'none'` on the document response. The in-document CSP cannot enforce `frame-ancestors`; the runtime also refuses framed execution as defense in depth.
-- `secure context is required`: startup fails outside a browser-designated secure context.
-- `private key export is separately authorized`: exporting a private signing key now requires both the worker session handle and a per-session export consent token that is kept out of app state and issued only when the private-key session is created/imported.
-- `private key files are raw secrets`: exported `.pqsk` files contain unencrypted private signing key material. The file CRC32 detects accidental corruption only; it does not provide confidentiality, authenticity, or tamper resistance. Store `.pqsk` files like any other signing secret.
-- Key/signature lengths are validated against selected suite before signing/verifying.
-- Browser-facing inputs are bounded by explicit policy limits for payloads, key files, signature containers, context, and metadata blocks.
-- Detached signature format is versioned and parsed defensively.
-- Signing holds a worker-side session lease and self-verifies every generated signature before any `.qsig` output is returned.
-- Imported expanded private keys must pass a sign/verify pairwise-consistency test before a
-  session or public key is exposed. ML-DSA and SLH-DSA use deterministic signing for this check.
-  This checks functional consistency, not provenance.
-- Worker-held private-key sessions expire after 30 minutes without activity. Expiry denies new
-  operations immediately and defers best-effort wiping only for an already-active lease.
-- Sign and verify results are bound to immutable review snapshots; stale asynchronous completions are discarded.
-- Text mode rejects unpaired UTF-16 surrogates. File mode should be used whenever exact source bytes and line endings matter.
-
-### Detached signature format (`.qsig`)
-
-Container includes:
-- `magic` + `version`
-- `suite id` (ML-DSA / SLH-DSA parameter set)
-- `signature profile id`
-- `payload digest alg id` (`SHA3-512`)
-- `payload digest`
-- `auth metadata digest alg id`
-- algorithm `context`
-- authenticated signer metadata:
-  - embedded public key
-  - signer fingerprint record (`SHA3-256(pubkey)`)
-- optional legacy display metadata (`filename`, `filesize`, `createdAt` UTC ISO8601 with
-  millisecond precision); current producers omit it because it is unsigned
-- signature bytes (detached)
-
-Verification UI shows:
-
-- algorithm,
-- hash used,
-- signer fingerprint,
-- signature size,
-- computed vs declared hash and whether that declared hash was signature-authenticated,
-- trust caveat when verification succeeds only with embedded signer metadata,
-- hard-failure diagnostics when loaded and embedded public keys disagree.
-
-Scope boundaries:
-- `.qsig` authenticates one exact payload byte string and the authenticated signer metadata defined by the format.
-- It does not authenticate filesystem filename, MIME type, file/text mode, semantic schema, archive paths/order, or reconstruction rules.
-- Display metadata is unauthenticated and MUST NOT be used for paths, policy, reconstruction, identity, or trust decisions.
-- New Quantum Signer output emits an empty display-metadata block. The strict parser retains the
-  fields only for existing/third-party v2 containers and the UI marks them unauthenticated.
-- The v2 authenticated-metadata digest and signer fingerprint use SHA3-256, so their classical collision strength is capped at 128 bits. A future breaking format revision is required to raise this without changing v2 semantics.
-
-The verifier evaluates the TBS signature even when the supplied payload digest differs. This
-prevents attacker-controlled, unverified container fields from being presented as signed claims.
-
-------------
-
-## Development
-
-### Install
-
-```bash
+```sh
 npm ci
+npm run preview
 ```
 
-### Run locally
+Open the displayed loopback address. Select a public `.pqpk` key from a trusted source, then the original file/text and `.qsig`. Browser key generation, private-key imports/exports and signing have been removed, including the worker handlers. The Sign tab explains local CLI use.
 
-```bash
-npm run dev
-```
+The browser runs public-only NIST known-answer tests at startup. Failure blocks worker operations. Worker bytes are embedded in the SRI-covered application bundle. Browser verification and hashing use pinned Noble libraries because complete native browser support for all suites is not uniform.
 
-Open: `http://localhost:5173`
+A matching loaded key gives `VALID`; an embedded key alone gives `UNTRUSTED`; a mismatched selected key or changed payload gives `INVALID`. CLI exit statuses are respectively 0, 2, and 1. A selected key is a trust input, not proof of its owner's identity: compare the full fingerprint through a trusted channel.
 
-### Automated self-tests
+## Format and assurance
 
-```bash
-npm run selftest
-```
+The [wire specification](spec/qsig-v2.txt) describes exact QSIG 2.0 bytes, authenticated metadata, contexts, reconstruction, legacy key files, PQSE 2, and applicable standards.
 
-Covers:
+QSIG signs a structured 108-byte TBS containing SHA3-512 of the original payload and SHA3-256 of authenticated signer metadata, using the pure ML-DSA/SLH-DSA context API. It does not use KMAC/cSHAKE or the HashML-DSA/HashSLH-DSA variants. It is a custom protocol, not CMS, JOSE or COSE. Filename, timestamp and MIME type are not signed; nonempty display metadata is rejected. Text uses strict UTF-8 without Unicode or newline normalization.
 
-- keygen -> sign -> verify (valid)
-- verify on modified file (invalid)
-- verify with wrong key (invalid)
-- tampered signature (invalid)
-- context mismatch (invalid)
-- embedded-only verification semantics (`UNTRUSTED` presentation with a valid primitive check)
-- loaded-vs-embedded mismatch hard failure
-- signature evaluation on payload mismatch
-- tampered authenticated metadata (parse rejection)
-- wrong metadata-block namespace and future minor version rejection
-- unknown critical authenticated metadata tag (parse rejection)
-- unsupported signer fingerprint algorithm id (parse rejection)
-- oversized context/signature/payload inputs (rejected)
-- malformed verification lengths returning `false`
-- private-key session lease and idle-expiry behavior
-- malformed container parse rejection
+Native KeyObjects reduce exposure of expanded private material to JavaScript. They do not provide hardware isolation, guaranteed erasure of passwords/runtime/OS copies, or protection from a compromised local machine. The legacy JavaScript signing/session modules remain only as regression references and are blocked from production bundles.
 
-Full mode (extra SLH-DSA suites):
+## Validation and release
 
-```bash
+```sh
+npm run check
 FULL_SELFTEST=1 npm run selftest
+npm run test:external-vectors
+npm run check:repro
+BASE_PATH=/quantum-signer/ npm run check:repro
+npm run test:release
 ```
 
-### Build
+CI runs full cryptographic checks on pull requests. Native/browser interoperability covers all six suites; external ML-DSA verification vectors run through both adapters. Container mutation, policy-injection, encrypted key, worker-fault and release-tampering checks are included.
 
-```bash
-npm run build
-```
+The manual release workflow separates dependency-running builds from the job that attests the manifest. Authenticate provenance for the exact reviewed repository/workflow/ref/commit, then verify the full file inventory using a separately trusted checkout before running a downloaded artifact. Unsigned hashes and SRI alone do not authenticate an origin. See [release verification](docs/RELEASE.md) for commands and required operational controls.
 
-### Static-host security headers
+`npm run package:release` creates `release/` with the standalone native CLI, browser build, licenses, specification and manifest. Run the authenticated standalone CLI as `node release/quantum-signer.mjs ...`.
 
-`npm run build` emits `dist/_headers` for compatible static hosts. A production-like deployment
-must verify the live document and worker response headers. GitHub Pages does not apply this file.
-
-### GitHub Pages preview
-
-`.github/workflows/pages.yml` is manual-only and requires an explicit public-preview
-acknowledgement. It:
-
-- installs dependencies,
-- runs self-tests,
-- builds static app into `dist/`,
-- publishes `dist/` as a preview.
-
-It is not a production deployment because GitHub Pages cannot enforce the generated CSP/security
-headers.
-
-------------
+GitHub Pages remains a manual, header-limited verification demo. Other static hosts should apply `dist/_headers` and validate the actual responses. Compromise of the HTML/origin can still falsify browser results; an authenticated local release is the stronger delivery model.
 
 ## License
 
-This project is distributed under the terms of the GNU Affero General Public License v3.0. See the `LICENSE` file for the full text.
+GNU Affero General Public License v3.0 or later; see [LICENSE](LICENSE).
 
-### Third‑party software licensed under other licenses
-
-Browser crypto tool libraries (see their version in the package.json):
-* SHA3-256 and SHA3-512 for hashing [noble-hashes](https://github.com/paulmillr/noble-hashes);
-* ML-DSA and SLH-DSA for post-quantum digital signature algorithms [noble-post-quantum](https://github.com/paulmillr/noble-post-quantum);
-
-The application incorporates the following dependencies that are released under the permissive MIT License.
-
-| Library               | Copyright holder | Upstream repository                               |
-| --------------------- | ---------------- | ------------------------------------------------- |
-| noble-post-quantum    | Paul Miller      | https://github.com/paulmillr/noble-post-quantum   |
-| noble-hashes          | Paul Miller      | https://github.com/paulmillr/noble-hashes         |
+Browser cryptographic dependencies are [noble-hashes](https://github.com/paulmillr/noble-hashes) and [noble-post-quantum](https://github.com/paulmillr/noble-post-quantum), copyright Paul Miller, MIT licensed. Release artifacts include their license notices.

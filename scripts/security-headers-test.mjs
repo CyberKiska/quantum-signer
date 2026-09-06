@@ -29,7 +29,7 @@ for (const directive of [
   "object-src 'none'",
   "base-uri 'none'",
   "script-src 'self'",
-  "worker-src 'self'",
+  "worker-src blob:",
 ]) {
   assert(DOCUMENT_CSP.includes(directive), `document CSP is missing ${directive}`);
 }
@@ -74,7 +74,7 @@ assert(
 );
 assert(
   sourceHtml.includes('content="%PRIVATE_KEY_OPERATIONS%"'),
-  'index.html must obtain its private-key capability from the build profile'
+  'index.html must declare its disabled private-key capability'
 );
 assert(
   !sourceHtml.includes("default-src 'none'"),
@@ -100,3 +100,5 @@ assert(
 );
 
 console.log('Security-header policy tests: PASS');
+
+assert(DOCUMENT_CSP.includes('worker-src blob:'), 'Workers must use embedded, integrity-covered bytes');

@@ -16,21 +16,15 @@
     along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
-import { DEFAULT_SUITE_ID, listSuites } from './crypto/suite-metadata.js';
 import { wipeBytes } from './crypto/bytes.js';
-import { byId, createWorkerClient, getBasePath, showToast, workerFriendlyError } from './ui/common.js';
+import { byId, createWorkerClient, showToast, workerFriendlyError } from './ui/common.js';
 import { setupLayout } from './ui/layout.js';
 import { setupKeysTab } from './ui/keys.js';
-import { setupSignTab } from './ui/sign.js';
 import { setupVerifyTab } from './ui/verify.js';
-
-const deploymentAllowsPrivateKeys =
-  document.querySelector('meta[name="private-key-operations"]')?.content === 'enabled';
 
 const state = {
   deliveryIsolated: globalThis.crossOriginIsolated === true,
-  privateKeyOperationsAllowed:
-    deploymentAllowsPrivateKeys && globalThis.crossOriginIsolated === true,
+  privateKeyOperationsAllowed: false,
   keys: {
     public: null,
     secret: null,
@@ -79,28 +73,16 @@ function renderFatalStartupError(message) {
 async function main() {
   enforceTopLevelBrowsingContext();
   enforceSecureContext();
-  const basePath = getBasePath();
-  const workerUrl = `${basePath}assets/worker.js`;
+  // Worker bytes are embedded at build time inside the SRI-covered app asset.
+  const workerUrl = URL.createObjectURL(new Blob([__QSIG_WORKER_SOURCE__], { type: 'text/javascript' }));
   const workerClient = createWorkerClient(workerUrl);
 
-  const suites = listSuites();
-
   setupLayout(state);
-  setupKeysTab(state, workerClient, suites, DEFAULT_SUITE_ID);
-  setupSignTab(state, workerClient);
+  setupKeysTab(state);
   setupVerifyTab(state, workerClient);
 
   const deliveryWarning = byId('delivery-warning');
   deliveryWarning.classList.toggle('hidden', state.privateKeyOperationsAllowed);
-  if (!state.privateKeyOperationsAllowed) {
-    showToast(
-      'warning',
-      deploymentAllowsPrivateKeys
-        ? 'Expected isolation headers are missing. Private-key operations are disabled.'
-        : 'This public demo is verification-only. Private-key operations are disabled.'
-    );
-  }
-
   const selfTestBtn = byId('sidebar-selftest');
 
   selfTestBtn.addEventListener('click', async () => {
@@ -134,12 +116,13 @@ async function main() {
     tornDown = true;
     wipeStateBytes(state);
     workerClient.destroy();
+    URL.revokeObjectURL(workerUrl);
   };
   window.addEventListener('pagehide', teardown, { once: true });
   window.addEventListener('beforeunload', teardown, { once: true });
   window.addEventListener('pageshow', (event) => {
     // A page placed into the back/forward cache has already destroyed its
-    // key-holding worker. Reload instead of restoring stale session handles.
+    // verification worker. Reload instead of restoring stale session handles.
     if (event.persisted) window.location.reload();
   });
 }

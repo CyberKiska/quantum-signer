@@ -1,7 +1,6 @@
 import {
   DOCUMENT_CSP,
   STANDARD_SECURITY_HEADERS,
-  WORKER_CSP,
 } from './security-headers.mjs';
 
 const MAX_ATTEMPTS = 10;
@@ -75,7 +74,7 @@ assertStandardHeaders(documentResponse, { skipHsts: loopbackHttp });
 const documentType = documentResponse.headers.get('Content-Type') || '';
 assert(documentType.toLowerCase().startsWith('text/html'), `document has unsafe MIME type: ${documentType}`);
 const documentHtml = await documentResponse.text();
-const expectedPrivateKeyProfile = process.env.EXPECTED_PRIVATE_KEY_OPERATIONS || 'enabled';
+const expectedPrivateKeyProfile = process.env.EXPECTED_PRIVATE_KEY_OPERATIONS || 'disabled';
 assert(
   documentHtml.includes(
     `<meta name="private-key-operations" content="${expectedPrivateKeyProfile}" />`
@@ -84,15 +83,16 @@ assert(
 );
 assert(!documentHtml.includes('%DOCUMENT_CSP%'), 'document contains an unreplaced CSP placeholder');
 
-const workerUrl = new URL('assets/worker.js', deploymentUrl);
-const workerResponse = await fetchWithRetry(workerUrl);
-assertHeader(workerResponse, 'Content-Security-Policy', WORKER_CSP);
-assertHeader(workerResponse, 'Cache-Control', 'no-cache, no-store, must-revalidate');
-assertStandardHeaders(workerResponse, { skipHsts: loopbackHttp });
-const workerType = workerResponse.headers.get('Content-Type') || '';
-assert(
-  /^(application|text)\/javascript(?:;|$)/i.test(workerType),
-  `worker has unsafe MIME type: ${workerType}`
-);
+const appUrl = new URL('assets/app.js', deploymentUrl);
+const appResponse = await fetchWithRetry(appUrl);
+assertHeader(appResponse, 'Cache-Control', 'no-cache, no-store, must-revalidate');
+assertStandardHeaders(appResponse, { skipHsts: loopbackHttp });
+assert(/^(application|text)\/javascript(?:;|$)/i.test(appResponse.headers.get('Content-Type') || ''), 'Unsafe application MIME type');
+const appBytes = new Uint8Array(await appResponse.arrayBuffer());
+const { createHash } = await import('node:crypto');
+const sri = `sha384-${createHash('sha384').update(appBytes).digest('base64')}`;
+assert(documentHtml.includes(`integrity="${sri}"`), 'Served app/embedded worker does not match HTML integrity');
+const separateWorker = await fetch(new URL('assets/worker.js', deploymentUrl), { redirect: 'error', signal: AbortSignal.timeout(10000) });
+assert(separateWorker.status === 404, 'An independently delivered worker remains available');
 
 console.log(`Live security-header verification: PASS (${deploymentUrl.origin})`);

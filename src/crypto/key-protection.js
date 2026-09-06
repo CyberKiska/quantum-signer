@@ -36,6 +36,9 @@ function encodePassphrase(passphrase, { forEncryption }) {
   if (typeof passphrase !== 'string' || passphrase.length === 0) {
     throw createError(ErrorCode.E_KEY_PASSPHRASE_REQUIRED);
   }
+  if (passphrase.length > MAX_PASSPHRASE_BYTES) {
+    throw createError(ErrorCode.E_KEY_PASSPHRASE_INVALID, { reason: 'too_long' });
+  }
   if (forEncryption && Array.from(passphrase).length < MIN_NEW_PASSPHRASE_CODE_POINTS) {
     throw createError(ErrorCode.E_KEY_PASSPHRASE_INVALID, {
       reason: 'too_short',
@@ -96,7 +99,7 @@ async function deriveAesKey(cryptoApi, passphraseBytes, salt, iterations, usages
   );
 }
 
-function createHeader({ suiteId, iterations, ciphertextLength }) {
+function createHeader({ suiteId, iterations, ciphertextLength, keyFormat }) {
   if (!Number.isInteger(suiteId) || suiteId <= 0 || suiteId > 0xff) {
     throw createError(ErrorCode.E_SUITE_UNSUPPORTED, { suiteId });
   }
@@ -106,7 +109,8 @@ function createHeader({ suiteId, iterations, ciphertextLength }) {
   const header = new Uint8Array(HEADER_LENGTH);
   const view = new DataView(header.buffer);
   header.set(PROTECTED_SECRET_KEY_MAGIC, 0);
-  header[4] = PROTECTED_SECRET_KEY_VERSION_MAJOR;
+  // PQSE 2 carries native PKCS#8; PQSE 1 continues to carry a PQSK file.
+  header[4] = keyFormat === 'pkcs8' ? 2 : PROTECTED_SECRET_KEY_VERSION_MAJOR;
   header[5] = PROTECTED_SECRET_KEY_VERSION_MINOR;
   header[6] = suiteId;
   header[7] = KDF_PBKDF2_HMAC_SHA512;
@@ -142,10 +146,13 @@ export async function encryptSecretKeyFile({
   secretKeyFile,
   passphrase,
   iterations = DEFAULT_PBKDF2_ITERATIONS,
+  keyFormat = 'pqsk',
 }) {
   assertBytesLimit(secretKeyFile, MAX_KEY_FILE_BYTES, 'secretKeyFile');
+  if (!['pqsk', 'pkcs8'].includes(keyFormat)) throw new TypeError('Unsupported protected key format');
   const cryptoApi = requireWebCrypto();
   const passphraseBytes = encodePassphrase(passphrase, { forEncryption: true });
+  const plaintext = Uint8Array.from(secretKeyFile);
   const salt = new Uint8Array(SALT_LENGTH);
   const iv = new Uint8Array(IV_LENGTH);
   let header;
@@ -157,8 +164,9 @@ export async function encryptSecretKeyFile({
     cryptoApi.getRandomValues(iv);
     header = createHeader({
       suiteId,
+      keyFormat,
       iterations,
-      ciphertextLength: secretKeyFile.length + GCM_TAG_LENGTH_BYTES,
+      ciphertextLength: plaintext.length + GCM_TAG_LENGTH_BYTES,
     });
     aad = concatBytes(header, salt, iv);
     const aesKey = await deriveAesKey(cryptoApi, passphraseBytes, salt, iterations, ['encrypt']);
@@ -166,10 +174,10 @@ export async function encryptSecretKeyFile({
       await cryptoApi.subtle.encrypt(
         { name: 'AES-GCM', iv, additionalData: aad, tagLength: 128 },
         aesKey,
-        secretKeyFile
+        plaintext
       )
     );
-    if (ciphertext.length !== secretKeyFile.length + GCM_TAG_LENGTH_BYTES) {
+    if (ciphertext.length !== plaintext.length + GCM_TAG_LENGTH_BYTES) {
       throw createError(ErrorCode.E_INTERNAL, { reason: 'unexpected_aes_gcm_length' });
     }
     return concatBytes(aad, ciphertext);
@@ -178,6 +186,7 @@ export async function encryptSecretKeyFile({
     throw createError(ErrorCode.E_KEY_PROTECTION_UNAVAILABLE);
   } finally {
     wipeBytes(passphraseBytes);
+    wipeBytes(plaintext);
     wipeBytes(salt);
     wipeBytes(iv);
     wipeBytes(header);
@@ -188,6 +197,9 @@ export async function encryptSecretKeyFile({
 
 export async function decryptSecretKeyFile(protectedFile, passphrase) {
   assertBytesLimit(protectedFile, MAX_KEY_FILE_BYTES, 'protectedSecretKeyFile');
+  // Take a snapshot before the first await: caller mutation must not replace
+  // the authenticated ciphertext while the password derivation is in flight.
+  protectedFile = Uint8Array.from(protectedFile);
   if (!isProtectedSecretKeyFile(protectedFile)) {
     throw createError(ErrorCode.E_FORMAT_MAGIC);
   }
@@ -200,7 +212,7 @@ export async function decryptSecretKeyFile(protectedFile, passphrase) {
   const versionMajor = header[4];
   const versionMinor = header[5];
   if (
-    versionMajor !== PROTECTED_SECRET_KEY_VERSION_MAJOR ||
+    ![PROTECTED_SECRET_KEY_VERSION_MAJOR, 2].includes(versionMajor) ||
     versionMinor > PROTECTED_SECRET_KEY_VERSION_MINOR
   ) {
     throw createError(ErrorCode.E_FORMAT_VERSION, { versionMajor, versionMinor });
@@ -252,7 +264,7 @@ export async function decryptSecretKeyFile(protectedFile, passphrase) {
       )
     );
     assertBytesLimit(plaintext, MAX_KEY_FILE_BYTES, 'secretKeyFile');
-    return { suiteId, secretKeyFile: plaintext };
+    return { suiteId, secretKeyFile: plaintext, keyFormat: versionMajor === 2 ? 'pkcs8' : 'pqsk' };
   } catch (err) {
     if (err?.code === ErrorCode.E_INPUT_TOO_LARGE || err?.code === ErrorCode.E_FORMAT_LENGTH) throw err;
     throw createError(ErrorCode.E_KEY_DECRYPT_FAILED);

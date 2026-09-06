@@ -1,0 +1,153 @@
+Quantum Signer wire profile: QSIG 2.0, PQPK/PQSK 1.1, PQSE 1.0/2.0
+
+This is an application-specific binary protocol. MUST and MUST NOT describe this
+profile, not additional requirements imposed by NIST. It is not CMS, JOSE, COSE,
+HashML-DSA, or HashSLH-DSA. No KMAC or cSHAKE is used by the application protocol.
+
+Suite identifiers (hex), raw public / expanded secret / signature bytes:
+01 ML-DSA-44             1312 / 2560 / 2420
+02 ML-DSA-65             1952 / 4032 / 3309
+03 ML-DSA-87             2592 / 4896 / 4627
+11 SLH-DSA-SHAKE-128s      32 /   64 / 7856
+12 SLH-DSA-SHAKE-192s      48 /   96 / 16224
+13 SLH-DSA-SHAKE-256s      64 /  128 / 29792
+All other suite identifiers MUST be rejected. Default generation uses 03.
+
+Byte construction
+All multibyte container integers are unsigned little-endian. Concatenation below
+is byte concatenation; displayed hex uses two lowercase digits per byte.
+The original payload is the exact file byte sequence, or strict UTF-8 of text.
+Text MUST reject unpaired UTF-16 surrogates. No Unicode normalization, newline
+conversion, BOM insertion/removal or whitespace trimming occurs for payloads.
+Empty payloads are allowed. Text does not bind a media type.
+
+payloadDigest = SHA3-512(payload), 64 bytes (FIPS 202, not Keccak-512).
+fingerprint   = 01 || SHA3-256(rawPublicKey), 33 bytes.
+authMetadata  = 10 || u16LE(publicKeyLength) || rawPublicKey ||
+                11 || u16LE(33) || fingerprint.
+authDigest    = SHA3-256(authMetadata), 32 bytes.
+TBS           = ASCII("QSTB") || 02 00 || 02 00 || suiteId || 01 || 01 || 01 ||
+                payloadDigest || authDigest.
+TBS is exactly 108 bytes. The two version pairs are TBS and QSIG versions.
+Context is exactly UTF-8("quantum-signer/v2"), 16 bytes.
+
+Sign and verify TBS through the pure ML-DSA or SLH-DSA external API with that
+context. The primitive's encoded message is 00 || 10 || context || TBS, 126 bytes.
+The application MUST NOT add this prefix itself when using a context-aware API.
+No prehash OID is prepended. OpenSSL API algorithm is null; context is supplied
+as bytes. Native signing uses the provider's default randomized signing mode;
+failures MUST NOT trigger a deterministic or JavaScript signing fallback.
+
+QSIG container (magic is PQSG, extension .qsig)
+Offset  Width  Value
+0       4      ASCII PQSG
+4       2      02 00 (version)
+6       1      suiteId
+7       1      01 (pure signature profile)
+8       1      01 (SHA3-512 payload digest)
+9       1      01 (SHA3-256 authenticated metadata digest)
+10      2      01 00 (context-present flag; no other bits accepted)
+12      64     payloadDigest
+76      32     authDigest
+108     1      10 (context length)
+109     1      00 (reserved)
+110     2      authenticated metadata length
+112     2      00 00 (display metadata length)
+114     4      raw signature length from suite table
+118     16     context
+134     varies authenticated metadata
+next    varies raw signature
+No trailing bytes are permitted. There is no embedded original payload.
+
+Metadata records use u8 tag, u16LE length, value. Tags MUST be unique, strictly
+ascending, nonempty and exactly 10 and 11. Both are required. Unknown tags,
+including noncritical-looking tags, MUST be rejected. The public key length MUST
+match the suite, the fingerprint MUST match the full public key, and authDigest
+MUST match the exact encoded record block. All nonempty display metadata MUST
+be rejected. Filenames, MIME type, timestamps and UI labels are not authenticated.
+
+Verification policy
+Parse strictly, reconstruct TBS, verify with the chosen public key and context,
+and compare the exact payload digest. Signature validity is distinct from payload
+matching and trust. An independently selected PQPK key MUST have the same suite
+and full raw public key as the embedded key; disagreement fails final policy even
+if one signature check succeeds. Embedded-key-only validity MUST NOT imply a
+trusted signer. Trust here means matching a user-selected key, not proving its
+owner's identity. Diagnostics MUST NOT supply or override validity/trust fields.
+The CLI exits 0 for trusted validity, 2 for embedded-only validity, 1 for failure.
+
+PQPK/PQSK legacy key container
+Offset  Width  Value
+0       4      ASCII PQPK (public) or PQSK (expanded private)
+4       2      01 01; readers also accept 01 00
+6       1      suiteId
+7       1      00 flags
+8       4      exact raw key length from suite table
+12      varies raw key bytes
+next    4      CRC-32/ISO-HDLC of all preceding bytes, little-endian
+CRC reflected polynomial edb88320, init ffffffff, final XOR ffffffff.
+CRC detects damage only; it is not authentication or encryption. Length/version,
+flags, suite, CRC and absence of trailing bytes are mandatory checks.
+New supported private keys are not exported in plaintext PQSK format.
+
+PQSE protected private keys (new extension .pqse)
+Offset  Width  Value
+0       4      ASCII PQSE
+4       2      01 00 (PQSK plaintext) or 02 00 (PKCS#8 DER plaintext)
+6       1      suiteId, authenticated and checked against the decrypted key
+7       1      01 PBKDF2-HMAC-SHA-512
+8       1      01 AES-256-GCM
+9       1      00 flags
+10      4      PBKDF2 iterations, default 600000; accepted 100000..5000000
+14      1      10 (16-byte salt)
+15      1      0c (12-byte IV)
+16      2      00 00 reserved
+18      4      ciphertext length including the 16-byte GCM tag
+22      16     random salt
+38      12     random IV
+50      varies ciphertext || 16-byte GCM tag
+AAD is the exact first 50 bytes. Salt and IV are independent CSPRNG requests.
+PBKDF2 derives a 32-byte AES key. Passwords are strict UTF-8 without normalization,
+maximum 1024 encoded bytes, minimum 12 code points for new encryption. An FD input
+may end in LF or CRLF, which terminates the password line and is not password data.
+Creation snapshots plaintext before awaits; opening snapshots the whole envelope.
+All header, algorithm, version, size, tag and suite mismatches MUST fail closed.
+PQSE 2 is a new key-file version, not a change to the QSIG signature protocol.
+PKCS#8 keys are decoded by Node/OpenSSL; ML-DSA seed-only export is supported.
+Legacy expanded ML-DSA imports use RFC 9881's expandedKey OCTET STRING wrapped in
+PKCS#8, with absent AlgorithmIdentifier parameters. SLH-DSA imports use raw-private
+Node key format. Every generated/imported native key passes a sign/verify pairwise
+test. Every emitted QSIG passes primitive and parsed-container self-verification.
+
+Resource limits (also enforced before expensive operations where possible)
+Payload 1 GiB; text 8 MiB UTF-8; key file 32 KiB; signature file 128 KiB;
+authenticated metadata 8 KiB; raw signature 64 KiB; context maximum 255 bytes at
+the primitive adapter, fixed 16 bytes in QSIG. Browser verification serializes
+worker requests and rejects concurrent requests while one is active.
+
+Implementation boundaries and normative references
+FIPS 204 (ML-DSA): https://csrc.nist.gov/pubs/fips/204/final
+FIPS 205 (SLH-DSA): https://csrc.nist.gov/pubs/fips/205/final
+FIPS 202 (SHA-3): https://csrc.nist.gov/pubs/fips/202/final
+SP 800-185 (KMAC/cSHAKE): not instantiated by this profile.
+SP 800-90A/B/C: provider entropy/DRBG assurance; application output length does
+not establish min-entropy or an approved entropy-source validation.
+SP 800-132, RFC 8018: password-based derivation and PKCS#8 storage composition.
+SP 800-38D, FIPS 197: AES-GCM and AES; FIPS 180-4: SHA-512 within PBKDF2/HMAC.
+RFC 2104 / FIPS 198-1: HMAC; RFC 3629: UTF-8; RFC 4648: canonical base encodings.
+RFC 5958 and ITU-T X.690: private-key structure / DER.
+RFC 9881, RFC 9909: ML-DSA / SLH-DSA algorithm identifiers and key encoding.
+RFC 9882, RFC 9814, RFC 9964: relevant only to future CMS/JOSE/COSE integration;
+QSIG does not claim conformance to those distinct protocol profiles.
+FIPS 140-3 / ISO/IEC 19790 and 24759: module validation requires separate evidence.
+https://nodejs.org/api/crypto.html documents the native integration API.
+
+Only the local CLI performs supported private operations, using Node/OpenSSL
+KeyObjects. The browser exposes verification and hashing only. Browser SHA-3 and
+PQ verification use pinned JavaScript dependencies because the required complete
+suite set is not uniformly available through Web Crypto. Browser workers do not
+import private sessions, private-key protection or the reference signing adapter.
+Reference JavaScript signing/session modules exist solely for regression testing.
+Native KeyObjects reduce JS exposure of expanded secrets but do not provide a
+hardware boundary or guaranteed erasure of passwords, transient exports, runtime
+copies or OS memory. Native provider use is not evidence of FIPS validation.
