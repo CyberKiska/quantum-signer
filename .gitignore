@@ -2,6 +2,7 @@ Thumbs.db
 .DS_Store
 /node_modules
 /dist
+/release
 .log
 .env
 scripts/contract-check.mjs
@@ -9,6 +10,7 @@ scripts/contract-check.mjs
 # Test files
 *.pqpk
 *.pqsk
+*.pqse
 *.qsig
 examples/
 !test-vectors/
@@ -17,3 +19,9 @@ examples/
 # Notes
 *.md
 !README.md
+
+# Local audit evidence and internal release notes
+/audit/
+/scripts/audit-adversarial.mjs
+/spec/release-validation.txt
+!docs/*.md

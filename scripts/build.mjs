@@ -30,7 +30,7 @@ export function normalizeBuildCommit(value) {
   throw new Error('BUILD_COMMIT must be "local" or a 40-64 character lowercase hexadecimal commit id');
 }
 
-function normalizePrivateKeyOperations(value) {
+export function normalizePrivateKeyOperations(value) {
   if (value === undefined || value === null || value === '' || value === 'disabled') return 'disabled';
   throw new Error('Browser private-key operations have been removed. Use the native signing CLI.');
 }

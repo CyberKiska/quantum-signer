@@ -9,6 +9,8 @@ import {
 } from '../src/crypto/algorithms.js';
 import { wipeBytes } from '../src/crypto/bytes.js';
 import { SuiteId } from '../src/crypto/suite-metadata.js';
+import { verifyBytes as verifyNative } from '../src/native/crypto.js';
+import { verifyBytes as verifyBrowser } from '../src/crypto/browser-verification.js';
 
 const WYCHEPROOF_COMMIT = 'b61843a9a5115bb758134b6a1f5d5e502d445342';
 const VECTOR_SPECS = Object.freeze([
@@ -209,6 +211,10 @@ for (const spec of VECTOR_SPECS) {
       }
 
       const expected = test.result === 'valid';
+      const suiteId = { 'ML-DSA-44': 1, 'ML-DSA-65': 2, 'ML-DSA-87': 3 }[spec.algorithm];
+      const args = { suiteId, publicKey, signature, message, contextBytes: options.context };
+      assert(verifyNative(args) === expected, `Native ${spec.algorithm} tcId ${test.tcId} mismatch`);
+      assert(verifyBrowser(args) === expected, `Browser ${spec.algorithm} tcId ${test.tcId} mismatch`);
       if (expected) validCases += 1;
       else invalidCases += 1;
       if (actual === expected) passed += 1;
