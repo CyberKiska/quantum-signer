@@ -1,6 +1,6 @@
 # Release verification
 
-Quantum Signer 2.0.1 provides local signing through Node.js 26+ and a verification-only browser application. The native CLI supports all six QSIG suites. Browser private-key operations are unavailable.
+Quantum Signer 2.1.0 provides local signing through Node.js 26+ and a verification-only browser application. The native CLI supports all six QSIG suites. Browser private-key operations are unavailable.
 
 ## Authenticate before executing
 
@@ -39,9 +39,18 @@ node release/quantum-signer.mjs sign --secret signer.pqse --file document.bin --
 node release/quantum-signer.mjs verify --file document.bin --signature document.qsig --public signer.pqpk
 ```
 
-Replace `REVIEWED_DIGEST` with the exact SHA3-512 digest you reviewed. New keys are encrypted PQSE 2 files containing PKCS#8. Legacy PQSE 1 and PQSK keys remain importable. Existing QSIG 2 signatures remain compatible. Share public keys and signatures, never private keys or passphrases.
+Replace `REVIEWED_DIGEST` with the exact SHA3-512 digest you reviewed. New keys are PQSE 3 files (Argon2id and AES-256-GCM) containing PKCS#8. Legacy PQSE 1/2 and PQSK keys still load with a warning; `rewrap --secret OLD --out NEW` migrates them. Existing QSIG 2 signatures remain compatible. Share public keys and signatures, never private keys or passphrases.
 
-Verification exits 0 for validity with a matching selected public key, 2 for valid signatures using only the embedded key, and 1 for errors or invalid signatures. Independently authenticate the selected public key or its full fingerprint.
+Verification exits 0 for a valid signature with a matching selected public key, 2 for integrity-only results that use only the embedded key, and 1 for errors or invalid signatures. Independently authenticate the selected public key or its full fingerprint.
+
+`doctor` runs the NIST ACVP-based native self-tests for every suite and must report `"selfTest": "pass"`.
+
+## Upgrading from 2.0.x
+
+- **Verification JSON:** embedded-key-only results now report `valid: false`, `integrityValid: true` and `code: "E_SIGNER_UNTRUSTED"`. Previously they reported `valid: true`. Exit codes are unchanged. Automation must accept only `valid: true` or exit status 0.
+- **Keys:** keys created by 2.1.0 are PQSE 3 and are not readable by 2.0.x. Migrate existing keys with `rewrap`, confirm the fingerprint it prints, then securely delete the old file.
+- **Passwords:** new passwords need at least 15 code points.
+- **OpenSSL:** 3.5.0 or newer is required, and the native self-tests must pass.
 
 Use a private output directory and secure backups. Native KeyObjects do not guarantee hardware isolation or erasure of passwords and OS/runtime memory copies. Node/OpenSSL use and a reported FIPS-mode flag are not module certification claims.
 
