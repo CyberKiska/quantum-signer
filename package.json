@@ -28,8 +28,8 @@
     "test:release": "node scripts/release-test.mjs"
   },
   "dependencies": {
-    "@noble/hashes": "2.3.0",
-    "@noble/post-quantum": "0.7.0"
+    "@noble/hashes": "2.4.0",
+    "@noble/post-quantum": "0.7.1"
   },
   "devDependencies": {
     "esbuild": "0.28.2"
