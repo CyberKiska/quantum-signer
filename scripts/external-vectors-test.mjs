@@ -9,7 +9,7 @@ import {
 } from './lib/reference-pq.mjs';
 import { wipeBytes } from '../src/crypto/bytes.js';
 import { SuiteId } from '../src/crypto/suite-metadata.js';
-import { verifyBytes as verifyNative } from '../src/native/crypto.js';
+import { importMlDsaSeed, publicKeyBytes, verifyBytes as verifyNative } from '../src/native/crypto.js';
 import { verifyBytes as verifyBrowser } from '../src/crypto/browser-verification.js';
 
 const WYCHEPROOF_COMMIT = 'b61843a9a5115bb758134b6a1f5d5e502d445342';
@@ -234,3 +234,69 @@ for (const spec of VECTOR_SPECS) {
 console.log(`Pinned Wycheproof ML-DSA verification vectors: PASS (${totalPassed}/${totalTests})`);
 await testPinnedNistSignatureGenerationVectors();
 await testPinnedNistSlhSignatureGenerationVectors();
+
+// Pinned NIST ACVP files (internalProjection.json carries expected results).
+// Set ACVP_DIR to a directory with <name>.json to run offline.
+const ACVP_COMMIT = 'a7f283cdc87d2d6dd93c1bac59e5622c5f9f8324';
+const ACVP_FILES = Object.freeze({
+  'ML-DSA-sigVer-FIPS204': '47cdd6314c7f746d02421ffcba89d4dbc7bb875ac49e07a029fdfc26fba55437',
+  'SLH-DSA-sigVer-FIPS205': 'a013fc2104f4ed4799d96d51141f65b965969b2cf10646626a021b6d456ce792',
+  'ML-DSA-keyGen-FIPS204': 'e67ee6540d40e11506c3c4e3b1f79fc1cefcd49820db99fc61f87cc8ba463baf',
+});
+const SUITE_IDS = Object.freeze({
+  'ML-DSA-44': SuiteId.ML_DSA_44, 'ML-DSA-65': SuiteId.ML_DSA_65, 'ML-DSA-87': SuiteId.ML_DSA_87,
+  'SLH-DSA-SHAKE-128s': SuiteId.SLH_DSA_SHAKE_128S, 'SLH-DSA-SHAKE-192s': SuiteId.SLH_DSA_SHAKE_192S,
+  'SLH-DSA-SHAKE-256s': SuiteId.SLH_DSA_SHAKE_256S,
+});
+
+async function loadAcvp(name) {
+  const bytes = process.env.ACVP_DIR
+    ? await readFile(path.join(process.env.ACVP_DIR, `${name}.json`))
+    : new Uint8Array(await (await fetch(
+      `https://raw.githubusercontent.com/usnistgov/ACVP-Server/${ACVP_COMMIT}/gen-val/json-files/${name}/internalProjection.json`,
+      { redirect: 'error', signal: AbortSignal.timeout(120_000) })).arrayBuffer());
+  assert(createHash('sha256').update(bytes).digest('hex') === ACVP_FILES[name], `${name} ACVP digest mismatch`);
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+}
+
+// sigVer: the QSIG profile is the pure, external interface (FIPS 204 Alg. 3,
+// FIPS 205 Alg. 24) for the six supported parameter sets.
+for (const name of ['ML-DSA-sigVer-FIPS204', 'SLH-DSA-sigVer-FIPS205']) {
+  const file = await loadAcvp(name);
+  let valid = 0;
+  let invalid = 0;
+  for (const group of file.testGroups) {
+    const suiteId = SUITE_IDS[group.parameterSet];
+    if (suiteId === undefined || group.signatureInterface !== 'external' || group.preHash !== 'pure' || group.externalMu) continue;
+    for (const test of group.tests) {
+      const args = {
+        suiteId,
+        publicKey: hexToBytes((test.pk ?? group.pk).toLowerCase(), `${name} tcId ${test.tcId} pk`),
+        signature: hexToBytes(test.signature.toLowerCase(), `${name} tcId ${test.tcId} signature`),
+        message: hexToBytes(test.message.toLowerCase(), `${name} tcId ${test.tcId} message`),
+        contextBytes: hexToBytes((test.context ?? '').toLowerCase(), `${name} tcId ${test.tcId} context`),
+      };
+      assert(verifyNative(args) === test.testPassed, `Native ${name} tcId ${test.tcId} mismatch (${test.reason})`);
+      assert(verifyBrowser(args) === test.testPassed, `Browser ${name} tcId ${test.tcId} mismatch (${test.reason})`);
+      if (test.testPassed) valid += 1; else invalid += 1;
+    }
+  }
+  assert(valid > 0 && invalid > 0, `${name} did not exercise acceptance and rejection`);
+  console.log(`  ${name}: native and browser PASS (valid=${valid}, invalid=${invalid})`);
+}
+
+// keyGen: FIPS 204 ML-DSA.KeyGen from ACVP seeds through native RFC 9881 seed import.
+{
+  const file = await loadAcvp('ML-DSA-keyGen-FIPS204');
+  let count = 0;
+  for (const group of file.testGroups) {
+    const suiteId = SUITE_IDS[group.parameterSet];
+    for (const test of group.tests) {
+      const key = importMlDsaSeed(suiteId, hexToBytes(test.seed.toLowerCase(), `keyGen tcId ${test.tcId} seed`));
+      assert(Buffer.from(publicKeyBytes(suiteId, key)).equals(Buffer.from(test.pk, 'hex')), `ML-DSA keyGen tcId ${test.tcId} public key mismatch`);
+      count += 1;
+    }
+  }
+  console.log(`  ML-DSA-keyGen-FIPS204: native PASS (${count} seeds)`);
+}
+console.log('Pinned NIST ACVP sigVer/keyGen vectors: PASS');

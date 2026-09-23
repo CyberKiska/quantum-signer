@@ -26,6 +26,10 @@ import {
   unpackSignatureV2,
 } from '../src/formats/containers.js';
 import { bytesToHexLower } from '../src/formats/encoding.js';
+import { listSuites } from '../src/crypto/suite-metadata.js';
+import { generateNativeKey, publicKeyBytes } from '../src/native/crypto.js';
+import { createDetachedSignature } from '../src/native/signing.js';
+import { createHash } from 'node:crypto';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -191,3 +195,33 @@ try {
   wipeBytes(keys.secretKey);
   wipeBytes(keys.publicKey);
 }
+
+// All suites, native signatures: every header/metadata byte and a stride over
+// the raw signature. No mutation may yield valid, and none may yield
+// integrity-only acceptance when no key is selected.
+let allSuiteMutations = 0;
+for (const suite of listSuites()) {
+  const key = generateNativeKey(suite.id);
+  const publicKey = publicKeyBytes(suite.id, key);
+  const suitePayloadDigest = createHash('sha3-512').update(`all-suite mutation corpus ${suite.name}`).digest();
+  const container = createDetachedSignature(suite.id, key, suitePayloadDigest);
+  const suitePublicKeyFile = packPublicKey({ suiteId: suite.id, keyBytes: publicKey });
+  const details = { computedHashHex: bytesToHexLower(suitePayloadDigest) };
+  const signatureStart = container.length - suite.lengths.signature;
+  const offsets = [];
+  for (let offset = 0; offset < signatureStart; offset += 1) offsets.push(offset);
+  for (let offset = signatureStart; offset < container.length; offset += 97) offsets.push(offset);
+  offsets.push(container.length - 1);
+  for (const offset of offsets) {
+    const mutated = Uint8Array.from(container);
+    mutated[offset] ^= 1 << (offset % 8);
+    for (const keyFile of [suitePublicKeyFile, null]) {
+      let result = null;
+      try { result = finalizePayloadVerification(unpackSignatureV2(mutated), keyFile, details); } catch { result = null; }
+      assert(!result?.valid && !result?.integrityValid,
+        `${suite.name} accepted a one-bit QSIG mutation at offset ${offset} (${keyFile ? 'selected key' : 'embedded key'})`);
+    }
+    allSuiteMutations += 1;
+  }
+}
+console.log(`All-suite native container mutation corpus: PASS (${allSuiteMutations} mutations x 2 key policies)`);
