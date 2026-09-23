@@ -126,6 +126,7 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
   if (!candidates.loaded && !candidates.embedded) {
     return {
       valid: false,
+      integrityValid: false,
       cryptoValid: false,
       trusted: false,
       code: ErrorCode.E_INPUT_REQUIRED,
@@ -153,6 +154,7 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
 
     return {
       valid: false,
+      integrityValid: false,
       cryptoValid,
       trusted: false,
       code: ErrorCode.E_SIGNER_BINDING_MISMATCH,
@@ -183,6 +185,7 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
   if (!result.valid) {
     return {
       valid: false,
+      integrityValid: false,
       cryptoValid: false,
       trusted: false,
       code: ErrorCode.E_SIGNATURE_INVALID,
@@ -201,11 +204,16 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     };
   }
 
+  // Fail-safe acceptance: a key taken from the container itself proves only
+  // that the container is internally consistent. Anyone can produce that for
+  // any payload with their own key, so it is never reported as valid.
+  const embeddedOnly = result.keySource === 'signature';
   return {
-    valid: true,
+    valid: !embeddedOnly,
+    integrityValid: true,
     cryptoValid: true,
-    trusted: result.keySource !== 'signature',
-    code: null,
+    trusted: !embeddedOnly,
+    code: embeddedOnly ? ErrorCode.E_SIGNER_UNTRUSTED : null,
     ...hashDetails,
     suiteId: parsedSig.suiteId,
     hashAlgId: parsedSig.hashAlgId,
@@ -216,12 +224,11 @@ export function finalizeVerification(parsedSig, publicKeyFile, hashDetails) {
     signerFingerprintHex: result.signerFingerprintHex,
     signatureMetadataFingerprintHex: candidates.signatureMetadataFingerprintHex,
     embeddedKeyMatchesLoaded: candidates.embeddedKeyMatchesLoaded,
-    verifiedKeySource: result.keySource === 'signature' ? 'signature' : 'loaded',
-    trustSource: result.keySource === 'signature' ? 'embedded-only' : 'loaded-key',
-    warning:
-      result.keySource === 'signature'
-        ? 'Verified using public key embedded in .qsig. For identity assurance, compare with a trusted key in Keys tab.'
-        : null,
+    verifiedKeySource: embeddedOnly ? 'signature' : 'loaded',
+    trustSource: embeddedOnly ? 'embedded-only' : 'loaded-key',
+    warning: embeddedOnly
+      ? 'Integrity only: verified with the public key embedded in .qsig, which anyone can create. Select the signer\'s public key from a trusted source to verify the signer.'
+      : null,
   };
 }
 
@@ -241,26 +248,30 @@ export function finalizePayloadVerification(parsedSig, publicKeyFile, hashDetail
 
   const declaredHashHex = bytesToHexLower(parsedSig.fileHash);
   const signatureResult = finalizeVerification(parsedSig, publicKeyFile, hashDetails);
-  const signaturePolicyValid = signatureResult.valid === true;
+  // Signature verified under the key-binding policy, whether or not the key is trusted.
+  const signaturePolicyValid = signatureResult.integrityValid === true;
   const payloadMatches = equalsHex(actualHashHex, declaredHashHex);
-  const valid = signaturePolicyValid && payloadMatches;
+  const integrityValid = signaturePolicyValid && payloadMatches;
+  const trusted = integrityValid && signatureResult.trusted === true;
+  let code = signatureResult.code;
+  let warning = signatureResult.warning;
+  if (signaturePolicyValid && !payloadMatches) {
+    code = ErrorCode.E_FILE_HASH_MISMATCH;
+    warning = 'The signature is valid for the digest declared in .qsig, but that digest does not match the provided payload.';
+  }
 
   return {
     ...signatureResult,
-    valid,
-    trusted: valid && signatureResult.trusted === true,
-    code:
-      signaturePolicyValid && !payloadMatches
-        ? ErrorCode.E_FILE_HASH_MISMATCH
-        : signatureResult.code,
+    // valid is the only acceptance decision: intact payload AND a selected key.
+    valid: trusted,
+    integrityValid,
+    trusted,
+    code: trusted ? null : code,
     signatureEvaluated: true,
     signaturePolicyValid,
     payloadMatches,
     declaredHashHex,
     signedHashHex: signaturePolicyValid ? declaredHashHex : null,
-    warning:
-      signaturePolicyValid && !payloadMatches
-        ? 'The signature is valid for the digest declared in .qsig, but that digest does not match the provided payload.'
-        : signatureResult.warning,
+    warning,
   };
 }

@@ -23,6 +23,7 @@ export const ErrorCode = Object.freeze({
   E_SIGN_SELF_VERIFY: 'E_SIGN_SELF_VERIFY',
   E_SIGNATURE_INVALID: 'E_SIGNATURE_INVALID',
   E_SIGNER_BINDING_MISMATCH: 'E_SIGNER_BINDING_MISMATCH',
+  E_SIGNER_UNTRUSTED: 'E_SIGNER_UNTRUSTED',
   E_FILE_HASH_MISMATCH: 'E_FILE_HASH_MISMATCH',
   E_WORKER_PROTOCOL: 'E_WORKER_PROTOCOL',
   E_INTERNAL: 'E_INTERNAL',
@@ -54,6 +55,8 @@ const MESSAGES = {
   [ErrorCode.E_SIGNATURE_INVALID]: 'Signature verification failed.',
   [ErrorCode.E_SIGNER_BINDING_MISMATCH]:
     'Loaded public key does not match the signer public key authenticated by the signature container.',
+  [ErrorCode.E_SIGNER_UNTRUSTED]:
+    'The signature is intact, but no independently selected public key verified the signer.',
   [ErrorCode.E_FILE_HASH_MISMATCH]: 'Provided file/hash does not match signed file hash.',
   [ErrorCode.E_WORKER_PROTOCOL]: 'Worker protocol error.',
   [ErrorCode.E_INTERNAL]: 'Internal error.',

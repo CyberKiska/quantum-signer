@@ -29,7 +29,8 @@ Outputs are created exclusively with mode 0600; existing files are never replace
 Use a private output directory; on Windows configure its ACL before key generation.
 Signing requires the digest reviewed using 'hash'; filenames are not authenticated.
 Verification without --public checks integrity only and exits 2 (untrusted signer).
-Exit status: 0 success/trusted verification, 1 error/invalid, 2 valid embedded-only.
+Exit status: 0 success/valid, 1 error/invalid, 2 integrity-only (embedded key, signer
+not verified; JSON valid=false, integrityValid=true, code E_SIGNER_UNTRUSTED).
 Native crypto is not a claim of FIPS module validation or hardware key isolation.`;
 
 async function regularFile(file, limit) {
@@ -200,7 +201,7 @@ export async function main(args = process.argv.slice(2)) {
     const publicFile = values.public ? await readBounded(values.public, MAX_KEY_FILE_BYTES) : null;
     const result = finalizePayloadVerification(parsed, publicFile, { computedHashHex: hash.toString('hex') });
     console.log(JSON.stringify(result, null, 2));
-    return !result.valid ? 1 : result.trusted ? 0 : 2;
+    return result.valid ? 0 : result.integrityValid ? 2 : 1;
   }
   need('secret'); need('out');
   let hash;

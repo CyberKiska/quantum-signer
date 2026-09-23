@@ -82,7 +82,8 @@ try {
   run(['sign', '--secret', 'key.pqse', '--file', 'payload', '--out', 'payload.qsig', '--expect-sha3-512', '00'.repeat(64), '--passphrase-fd', '0'], 1);
   run(['sign', '--secret', 'key.pqse', '--file', 'payload', '--out', 'payload.qsig', '--expect-sha3-512', digest, '--passphrase-fd', '0']);
   run(['verify', '--file', 'payload', '--signature', 'payload.qsig', '--public', 'key.pqpk']);
-  run(['verify', '--file', 'payload', '--signature', 'payload.qsig'], 2);
+  const embeddedOnly = JSON.parse(run(['verify', '--file', 'payload', '--signature', 'payload.qsig'], 2));
+  assert(!embeddedOnly.valid && embeddedOnly.integrityValid && !embeddedOnly.trusted && embeddedOnly.code === 'E_SIGNER_UNTRUSTED');
   run(['public', '--secret', 'key.pqse', '--out', 'recovered.pqpk', '--passphrase-fd', '0']);
   assert.deepEqual(await readFile(path.join(directory, 'key.pqpk')), await readFile(path.join(directory, 'recovered.pqpk')));
   await writeFile(path.join(directory, 'payload'), 'tampered');

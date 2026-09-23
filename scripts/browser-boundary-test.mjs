@@ -50,9 +50,10 @@ for (const suite of listSuites()) {
   const valid = await call('VERIFY_FILE', params);
   assert(valid.ok && valid.result.valid && valid.result.trusted, suite.name);
   const embedded = await call('VERIFY_FILE', { ...params, publicKeyFile: null });
-  assert(embedded.result.valid && !embedded.result.trusted);
+  assert(!embedded.result.valid && embedded.result.integrityValid && !embedded.result.trusted &&
+    embedded.result.code === 'E_SIGNER_UNTRUSTED', 'embedded-only must be integrity-only');
   const wrong = await call('VERIFY_FILE', { ...params, file: new Blob(['wrong']) });
-  assert(!wrong.result.valid && !wrong.result.trusted);
+  assert(!wrong.result.valid && !wrong.result.integrityValid && !wrong.result.trusted);
   assert.equal((await call('VERIFY_FILE', { ...params, publicKeyFile: {} })).ok, false);
 }
 const failed = await worker({ corruptKat: true });

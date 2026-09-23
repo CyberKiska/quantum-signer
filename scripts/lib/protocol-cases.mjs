@@ -563,7 +563,7 @@ function buildCases(suites) {
     });
 
     cases.push({
-      name: `${prefix}: embedded-only verification must stay valid with warning`,
+      name: `${prefix}: embedded-only verification must report integrity only, never valid`,
       fn: async () => {
         const keys = generateKeypair(suiteId);
         const payload = textBytes('embedded-only-policy-check');
@@ -580,8 +580,11 @@ function buildCases(suites) {
           inputLength: payload.length,
         });
 
-        if (!result.valid || !result.cryptoValid || result.trusted !== false) {
-          throw new Error('embedded-only verification unexpectedly failed');
+        if (result.valid !== false || result.integrityValid !== true || !result.cryptoValid || result.trusted !== false) {
+          throw new Error('embedded-only verification was not reported as integrity-only');
+        }
+        if (result.code !== ErrorCode.E_SIGNER_UNTRUSTED) {
+          throw new Error('embedded-only verification did not carry E_SIGNER_UNTRUSTED');
         }
         if (result.trustSource !== 'embedded-only' || result.verifiedKeySource !== 'signature') {
           throw new Error('embedded-only verification returned wrong trust semantics');

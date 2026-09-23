@@ -118,7 +118,7 @@ try {
   // Caller diagnostics cannot override cryptographic or signer-binding decisions.
   const hostileDetails = {
     providedHashHex: bytesToHexLower(payloadDigest),
-    valid: true, cryptoValid: true, trusted: true, code: null,
+    valid: true, integrityValid: true, cryptoValid: true, trusted: true, code: null,
     signaturePolicyValid: true, payloadMatches: true, trustSource: 'loaded-key',
   };
   const damaged = unpackSignatureV2(signatureFile);
@@ -127,7 +127,8 @@ try {
   assert(!rejected.valid && !rejected.trusted && !rejected.cryptoValid && rejected.code,
     'diagnostics overrode an invalid signature');
   const embeddedOnly = finalizePayloadVerification(baseline, null, hostileDetails);
-  assert(embeddedOnly.valid && !embeddedOnly.trusted, 'diagnostics promoted an embedded key to trusted');
+  assert(!embeddedOnly.valid && embeddedOnly.integrityValid && !embeddedOnly.trusted,
+    'diagnostics promoted an embedded key to valid or trusted');
   const otherKeys = generateKeypair(suiteId);
   try {
     const mismatch = finalizePayloadVerification(baseline,

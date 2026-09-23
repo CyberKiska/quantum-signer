@@ -78,10 +78,14 @@ Parse strictly, reconstruct TBS, verify with the chosen public key and context,
 and compare the exact payload digest. Signature validity is distinct from payload
 matching and trust. An independently selected PQPK key MUST have the same suite
 and full raw public key as the embedded key; disagreement fails final policy even
-if one signature check succeeds. Embedded-key-only validity MUST NOT imply a
-trusted signer. Trust here means matching a user-selected key, not proving its
-owner's identity. Diagnostics MUST NOT supply or override validity/trust fields.
-The CLI exits 0 for trusted validity, 2 for embedded-only validity, 1 for failure.
+if one signature check succeeds. Trust here means matching a user-selected key,
+not proving its owner's identity. Diagnostics MUST NOT supply or override
+validity/trust fields.
+Results are fail-safe: valid = signature policy passes AND payload matches AND a
+selected key was used. A result that verifies only with the key embedded in the
+container (which anyone can mint) MUST report valid=false, integrityValid=true,
+trusted=false and code E_SIGNER_UNTRUSTED. Consumers MUST accept only valid=true.
+The CLI exits 0 for valid, 2 for integrity-only, 1 for failure.
 
 PQPK/PQSK legacy key container
 Offset  Width  Value
