@@ -199,10 +199,16 @@ export function runAllNativeSelfTests() {
   for (const { id } of listSuites()) ensureNativeSelfTest(id, { signing: true });
 }
 
+// Dedicated FIPS 204/205 context for pairwise tests. The empty context is what
+// X.509/CMS ML-DSA and SLH-DSA use (RFC 9881/9882/9814), and QSIG uses its own;
+// a PCT signature must not be valid in either domain even though it is never
+// emitted.
+const PCT_CONTEXT = Buffer.from('quantum-signer/pct/v1');
+
 export function checkPrivateKey(suiteId, privateKey) {
   // Full pairwise test, including legacy imports whose embedded public component
   // alone does not establish consistency of the secret signing material.
-  signBytesNative({ suiteId, privateKey, message: Buffer.from('quantum-signer/key-check/v1') }).fill(0);
+  signBytesNative({ suiteId, privateKey, message: Buffer.from('quantum-signer/key-check/v1'), contextBytes: PCT_CONTEXT }).fill(0);
 }
 
 export function generateNativeKey(suiteId) {
