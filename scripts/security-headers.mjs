@@ -13,6 +13,10 @@ export const DOCUMENT_CSP = [
   "script-src 'self'",
   "style-src 'self'",
   "worker-src blob:",
+  // Trusted Types (W3C): DOM script sinks reject strings. The only permitted
+  // policy converts the SRI-covered embedded worker's blob: URL.
+  "require-trusted-types-for 'script'",
+  'trusted-types qsig-worker',
 ].join('; ');
 
 // frame-ancestors is intentionally omitted from the meta policy because

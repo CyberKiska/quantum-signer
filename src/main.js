@@ -75,7 +75,15 @@ async function main() {
   enforceSecureContext();
   // Worker bytes are embedded at build time inside the SRI-covered app asset.
   const workerUrl = URL.createObjectURL(new Blob([__QSIG_WORKER_SOURCE__], { type: 'text/javascript' }));
-  const workerClient = createWorkerClient(workerUrl);
+  // CSP requires Trusted Types for script sinks. This policy (the only one the
+  // CSP allows) accepts exactly the blob URL created above and nothing else.
+  const workerPolicy = globalThis.trustedTypes?.createPolicy('qsig-worker', {
+    createScriptURL(url) {
+      if (url !== workerUrl) throw new TypeError('Unexpected worker script URL');
+      return url;
+    },
+  });
+  const workerClient = createWorkerClient(workerPolicy ? workerPolicy.createScriptURL(workerUrl) : workerUrl);
 
   setupLayout(state);
   setupKeysTab(state);

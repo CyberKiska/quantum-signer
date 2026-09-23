@@ -4,6 +4,7 @@ import {
   safeReviewText,
 } from '../src/ui/common.js';
 import { resolveSignInputKind } from '../src/core/sign-input.js';
+import { describeDeceptiveText } from '../src/ui/verify.js';
 import { ErrorCode, createError, normalizeError } from '../src/crypto/errors.js';
 import { equalsBytes, equalsHex } from '../src/crypto/bytes.js';
 
@@ -137,5 +138,9 @@ assert(!equalsBytes(Uint8Array.of(1, 2), Uint8Array.of(1, 3)), 'different byte s
 assert(!equalsBytes(Uint8Array.of(1), Uint8Array.of(1, 0)), 'different byte lengths compared equal');
 assert(equalsHex('00aaff', '00aaff'), 'equal hexadecimal strings did not compare equal');
 assert(!equalsHex('00aaff', '00aafe'), 'different hexadecimal strings compared equal');
+
+assert(describeDeceptiveText('plain text\nwith newline') === null, 'ordinary text was flagged');
+const deceptive = describeDeceptiveText('pay \u202eevil\u202c to\u200b bob');
+assert(deceptive?.includes('U+202E') && deceptive.includes('U+200B') && deceptive.startsWith('3 '), 'bidi/invisible text was not surfaced');
 
 console.log('P0 display-integrity and sign-protocol tests: PASS');

@@ -30,6 +30,8 @@ for (const directive of [
   "base-uri 'none'",
   "script-src 'self'",
   "worker-src blob:",
+  "require-trusted-types-for 'script'",
+  'trusted-types qsig-worker',
 ]) {
   assert(DOCUMENT_CSP.includes(directive), `document CSP is missing ${directive}`);
 }
