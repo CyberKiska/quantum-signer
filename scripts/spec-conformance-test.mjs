@@ -70,4 +70,22 @@ const result = finalizePayloadVerification(parsed, packPublicKey({ suiteId, keyB
   computedHashHex: vector.payloadDigestHex,
 });
 assert(result.valid && result.trusted, 'vector must pass final verification policy');
+
+// PQSE 3 table: offsets must be contiguous and match an emitted file.
+const { encryptSecretKeyFile } = await import('../src/crypto/key-protection.js');
+const pqseTable = spec.slice(spec.indexOf('PQSE 3 (written'), spec.indexOf('AAD is the exact first 54 bytes'));
+const pqseRows = [...pqseTable.matchAll(/^(\d+)\s+(\d+|varies)\s+(.+)$/gmu)].map(([, offset, width, value]) => ({
+  offset: Number(offset), width: width === 'varies' ? null : Number(width), value,
+}));
+assert.equal(pqseRows.length, 16, 'PQSE 3 table rows');
+for (let i = 1; i < pqseRows.length; i++) assert.equal(pqseRows[i].offset, pqseRows[i - 1].offset + pqseRows[i - 1].width, `PQSE offset ${pqseRows[i].offset}`);
+const pqse = await encryptSecretKeyFile({ suiteId, secretKeyFile: new Uint8Array(54), keyFormat: 'pkcs8', passphrase: 'spec conformance password' });
+const pqseView = new DataView(pqse.buffer, pqse.byteOffset);
+for (const { offset, width, value } of pqseRows) {
+  const literal = value.match(/^((?:[0-9a-f]{2} ?)+)(?:\(|[A-Z]|$)/u);
+  if (literal && width !== null) assert.deepEqual(Buffer.from(pqse.subarray(offset, offset + width)), hex(literal[1].replaceAll(' ', '')), `PQSE value at ${offset}`);
+  const def = value.match(/default (\d+)/u);
+  if (def) assert.equal(width === 1 ? pqse[offset] : pqseView.getUint32(offset, true), Number(def[1]), `PQSE default at ${offset}`);
+}
+assert.equal(pqse.length, 54 + 54 + 16, 'PQSE 3 total length');
 console.log('Wire-spec conformance vector: PASS');
