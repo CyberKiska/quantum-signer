@@ -154,7 +154,11 @@ FIPS 140-3 / ISO/IEC 19790 and 24759: module validation requires separate eviden
 https://nodejs.org/api/crypto.html documents the native integration API.
 
 Only the local CLI performs supported private operations, using Node/OpenSSL
-KeyObjects. The browser exposes verification and hashing only. Browser SHA-3 and
+KeyObjects. It requires OpenSSL 3.5.0 or newer and, before the first use of each
+suite in a process, runs NIST ACVP-derived self-tests: SHA3-256/512 KATs, pure
+verification KAT with wrong-context/message/signature rejections, ML-DSA KeyGen
+from an ACVP seed, and before private operations a signature from the ACVP key
+checked against the ACVP public key. Any failure stops all native operations. The browser exposes verification and hashing only. Browser SHA-3 and
 PQ verification use pinned JavaScript dependencies because the required complete
 suite set is not uniformly available through Web Crypto. Browser workers do not
 import private sessions, private-key protection or the reference signing adapter.

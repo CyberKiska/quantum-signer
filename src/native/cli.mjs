@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { constants, readSync } from 'node:fs';
+import { constants, readSync, realpathSync } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { createHash, getFips } from 'node:crypto';
 import { parseArgs } from 'node:util';
@@ -11,7 +11,7 @@ import { MAX_KEY_FILE_BYTES, MAX_PAYLOAD_FILE_BYTES, MAX_SIGNATURE_FILE_BYTES } 
 import { packPublicKey, unpackSecretKey, unpackSignatureV2 } from '../formats/containers.js';
 import { encryptSecretKeyFile, decryptSecretKeyFile, isProtectedSecretKeyFile } from '../crypto/key-protection.js';
 import { finalizePayloadVerification } from '../crypto/verify-policy.js';
-import { assertNativeRuntime, generateNativeKey, publicKeyBytes, importLegacySecretKey, importPkcs8, checkPrivateKey } from './crypto.js';
+import { MIN_OPENSSL_VERSION, assertNativeRuntime, generateNativeKey, publicKeyBytes, importLegacySecretKey, importPkcs8, checkPrivateKey, runAllNativeSelfTests } from './crypto.js';
 import { createDetachedSignature } from './signing.js';
 
 const HELP = `Quantum Signer — local Node/OpenSSL signing (Node.js 26+)
@@ -31,6 +31,8 @@ Signing requires the digest reviewed using 'hash'; filenames are not authenticat
 Verification without --public checks integrity only and exits 2 (untrusted signer).
 Exit status: 0 success/valid, 1 error/invalid, 2 integrity-only (embedded key, signer
 not verified; JSON valid=false, integrityValid=true, code E_SIGNER_UNTRUSTED).
+Before first use of each suite, NIST ACVP-based self-tests check the OpenSSL provider;
+any failure stops all native operations. 'doctor' runs them for every suite.
 Native crypto is not a claim of FIPS module validation or hardware key isolation.`;
 
 async function regularFile(file, limit) {
@@ -174,8 +176,10 @@ export async function main(args = process.argv.slice(2)) {
   const need = name => { if (!values[name]) throw new Error(`Missing --${name}`); return values[name]; };
   if (command === 'help') { console.log(HELP); return 0; }
   if (command === 'doctor') {
-    console.log(JSON.stringify({ node: process.versions.node, openssl: process.versions.openssl, fipsMode: getFips() === 1,
-      signingProvider: 'node:crypto', moduleValidationEstablished: false }, null, 2));
+    // Runs every suite's NIST ACVP-based self-tests; a failure exits 1.
+    runAllNativeSelfTests();
+    console.log(JSON.stringify({ node: process.versions.node, openssl: process.versions.openssl, minimumOpenssl: MIN_OPENSSL_VERSION,
+      fipsMode: getFips() === 1, signingProvider: 'node:crypto', selfTest: 'pass', moduleValidationEstablished: false }, null, 2));
     return 0;
   }
   if (command === 'hash') { console.log((await hashFile(need('file'))).toString('hex')); return 0; }
@@ -218,7 +222,14 @@ export async function main(args = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Compare real paths: launching through a symlink (npm bin links, /tmp on
+// macOS) must still run the CLI instead of silently exiting 0.
+function invokedAsMain() {
+  try { return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href; }
+  catch { return false; }
+}
+
+if (invokedAsMain()) {
   main().then(code => { process.exitCode = code; }).catch(error => {
     // Do not print provider error stacks, input bytes, or passwords.
     console.error(`Quantum Signer: ${error.code ? String(error.code) : error.message}`);
