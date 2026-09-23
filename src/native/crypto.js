@@ -54,6 +54,19 @@ export function importLegacySecretKey(suiteId, bytes) {
   finally { expanded.fill(0); privateOctets.fill(0); body.fill(0); encoded.fill(0); }
 }
 
+// RFC 9881 seed-only ML-DSA private key: PKCS#8 privateKey = [0] IMPLICIT OCTET
+// STRING (SIZE (32)). FIPS 204 ML-DSA.KeyGen_internal expands it deterministically.
+export function importMlDsaSeed(suiteId, seed) {
+  if (getSuiteMetadata(suiteId).family !== 'ML-DSA' || !(seed instanceof Uint8Array) || seed.length !== 32) {
+    throw new TypeError('ML-DSA seed import requires an ML-DSA suite and a 32-byte seed.');
+  }
+  const algorithm = der(0x30, der(6, Buffer.from([0x60, 0x86, 0x48, 1, 0x65, 3, 4, 3, 16 + suiteId])));
+  const privateOctets = der(4, der(0x80, seed));
+  const encoded = der(0x30, Buffer.concat([Buffer.from([2, 1, 0]), algorithm, privateOctets]));
+  try { return importPkcs8(suiteId, encoded); }
+  finally { privateOctets.fill(0); encoded.fill(0); }
+}
+
 export function importPkcs8(suiteId, bytes) {
   assertBytesLimit(bytes, MAX_KEY_FILE_BYTES, 'PKCS8');
   // OpenSSL may accept a valid DER object followed by ignored bytes. Require

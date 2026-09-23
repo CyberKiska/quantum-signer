@@ -20,6 +20,10 @@ The original payload is the exact file byte sequence, or strict UTF-8 of text.
 Text MUST reject unpaired UTF-16 surrogates. No Unicode normalization, newline
 conversion, BOM insertion/removal or whitespace trimming occurs for payloads.
 Empty payloads are allowed. Text does not bind a media type.
+These rules apply to bytes/string values received by the encoder. Browser text
+controls can normalize CRLF to LF before encoding; use File mode to preserve
+the original bytes of an existing text file. The browser UI requires nonempty
+Plain Text even though the worker/format permit empty payloads.
 
 payloadDigest = SHA3-512(payload), 64 bytes (FIPS 202, not Keccak-512).
 fingerprint   = 01 || SHA3-256(rawPublicKey), 33 bytes.
@@ -29,10 +33,10 @@ authDigest    = SHA3-256(authMetadata), 32 bytes.
 TBS           = ASCII("QSTB") || 02 00 || 02 00 || suiteId || 01 || 01 || 01 ||
                 payloadDigest || authDigest.
 TBS is exactly 108 bytes. The two version pairs are TBS and QSIG versions.
-Context is exactly UTF-8("quantum-signer/v2"), 16 bytes.
+Context is exactly UTF-8("quantum-signer/v2"), 17 bytes.
 
 Sign and verify TBS through the pure ML-DSA or SLH-DSA external API with that
-context. The primitive's encoded message is 00 || 10 || context || TBS, 126 bytes.
+context. The primitive's encoded message is 00 || 11 || context || TBS, 127 bytes.
 The application MUST NOT add this prefix itself when using a context-aware API.
 No prehash OID is prepended. OpenSSL API algorithm is null; context is supplied
 as bytes. Native signing uses the provider's default randomized signing mode;
@@ -49,15 +53,18 @@ Offset  Width  Value
 10      2      01 00 (context-present flag; no other bits accepted)
 12      64     payloadDigest
 76      32     authDigest
-108     1      10 (context length)
+108     1      11 (context length: 17 bytes)
 109     1      00 (reserved)
 110     2      authenticated metadata length
 112     2      00 00 (display metadata length)
 114     4      raw signature length from suite table
-118     16     context
-134     varies authenticated metadata
+118     17     context
+135     varies authenticated metadata
 next    varies raw signature
 No trailing bytes are permitted. There is no embedded original payload.
+Conformance vector: qsig-v2-vector.json (spec/ in source, release root in
+packages) gives seed, public key, payload, metadata, TBS and a complete QSIG in
+hex. Everything except the randomized signature is reproducible from the seed.
 
 Metadata records use u8 tag, u16LE length, value. Tags MUST be unique, strictly
 ascending, nonempty and exactly 10 and 11. Both are required. Unknown tags,
@@ -122,7 +129,7 @@ test. Every emitted QSIG passes primitive and parsed-container self-verification
 Resource limits (also enforced before expensive operations where possible)
 Payload 1 GiB; text 8 MiB UTF-8; key file 32 KiB; signature file 128 KiB;
 authenticated metadata 8 KiB; raw signature 64 KiB; context maximum 255 bytes at
-the primitive adapter, fixed 16 bytes in QSIG. Browser verification serializes
+the primitive adapter, fixed 17 bytes in QSIG. Browser verification serializes
 worker requests and rejects concurrent requests while one is active.
 
 Implementation boundaries and normative references
