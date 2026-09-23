@@ -1,9 +1,9 @@
 import { SuiteId, unpackSecretKey } from '../src/formats/containers.js';
-import { generateKeypair } from '../src/crypto/algorithms.js';
+import { generateKeypair } from './lib/reference-pq.mjs';
 import {
   createSecretSessionManager,
   validateGeneratedKeyPair,
-} from '../src/crypto/secret-session.js';
+} from './lib/secret-session.mjs';
 import { wipeBytes } from '../src/crypto/bytes.js';
 import { isProtectedSecretKeyFile } from '../src/crypto/key-protection.js';
 

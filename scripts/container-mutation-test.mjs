@@ -4,7 +4,7 @@ import {
   getDefaultSignatureProfileId,
   hashBytesSHA3512,
   signBytesVerified,
-} from '../src/crypto/algorithms.js';
+} from './lib/reference-pq.mjs';
 import { computeFingerprintBytes } from '../src/crypto/fingerprint.js';
 import { finalizePayloadVerification } from '../src/crypto/verify-policy.js';
 import { equalsBytes, wipeBytes } from '../src/crypto/bytes.js';

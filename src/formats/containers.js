@@ -2,7 +2,7 @@ import { sha3_256 } from '#crypto/hashes';
 import { ErrorCode, createError } from '../crypto/errors.js';
 import { equalsBytes, wipeBytes } from '../crypto/bytes.js';
 import { normalizeCanonicalUtcIso8601 } from '../crypto/time.js';
-import { SuiteId, getSuiteWireLengths } from '../crypto/suite-metadata.js';
+import { SignatureProfileId, SuiteId, getSuiteWireLengths, listSuites } from '../crypto/suite-metadata.js';
 import {
   MAX_AUTH_METADATA_BYTES,
   MAX_CONTEXT_BYTES,
@@ -31,7 +31,7 @@ export const MAGIC_PQSK = utf8ToBytes('PQSK');
 export const MAGIC_TBS = utf8ToBytes('QSTB');
 const QSIG_V2_CONTEXT_BYTES = utf8ToBytes(QSIG_V2_CONTEXT);
 
-export { SuiteId };
+export { SignatureProfileId, SuiteId };
 
 export const HashAlgId = Object.freeze({
   SHA3_512: 0x01,
@@ -41,22 +41,11 @@ export const FingerprintAlgId = Object.freeze({
   SHA3_256: 0x01,
 });
 
-export const SignatureProfileId = Object.freeze({
-  PQ_DETACHED_PURE_CONTEXT_V2: 0x01,
-});
-
 export const AuthDigestAlgId = Object.freeze({
   SHA3_256: 0x01,
 });
 
-export const SUITE_NAMES = Object.freeze({
-  [SuiteId.ML_DSA_44]: 'ML-DSA-44',
-  [SuiteId.ML_DSA_65]: 'ML-DSA-65',
-  [SuiteId.ML_DSA_87]: 'ML-DSA-87',
-  [SuiteId.SLH_DSA_SHAKE_128S]: 'SLH-DSA-SHAKE-128s',
-  [SuiteId.SLH_DSA_SHAKE_192S]: 'SLH-DSA-SHAKE-192s',
-  [SuiteId.SLH_DSA_SHAKE_256S]: 'SLH-DSA-SHAKE-256s',
-});
+export const SUITE_NAMES = Object.freeze(Object.fromEntries(listSuites().map((suite) => [suite.id, suite.name])));
 
 export const HASH_NAMES = Object.freeze({
   [HashAlgId.SHA3_512]: 'SHA3-512',

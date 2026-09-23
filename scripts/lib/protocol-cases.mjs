@@ -10,17 +10,17 @@ import {
   hashFileSHA3512,
   signBytes,
   verifyBytes,
-} from './algorithms.js';
-import { computeFingerprintBytes } from './fingerprint.js';
+} from './reference-pq.mjs';
+import { computeFingerprintBytes } from '../../src/crypto/fingerprint.js';
 import {
   MAX_CONTEXT_BYTES,
   MAX_PAYLOAD_FILE_BYTES,
   MAX_SIGNATURE_BYTES,
-} from './policy.js';
-import { createSecretSessionManager } from './secret-session.js';
-import { normalizeMetadata } from './validate.js';
-import { ErrorCode } from './errors.js';
-import { finalizePayloadVerification, finalizeVerification } from './verify-policy.js';
+} from '../../src/crypto/policy.js';
+import { createSecretSessionManager } from './secret-session.mjs';
+import { normalizeMetadata } from '../../src/crypto/validate.js';
+import { ErrorCode } from '../../src/crypto/errors.js';
+import { finalizePayloadVerification, finalizeVerification } from '../../src/crypto/verify-policy.js';
 import {
   AuthDigestAlgId,
   FingerprintAlgId,
@@ -44,11 +44,14 @@ import {
   unpackPublicKey,
   unpackSecretKey,
   unpackSignatureV2,
-} from '../formats/containers.js';
-import { equalsBytes, wipeBytes } from './bytes.js';
-import { utf8ToBytesStrict } from './text-encoding.js';
-import { base64ToBytes, base64UrlToBytes } from '../formats/encoding.js';
-import { createOperationGate } from '../core/operation-gate.js';
+} from '../../src/formats/containers.js';
+import { equalsBytes, wipeBytes } from '../../src/crypto/bytes.js';
+import { utf8ToBytesStrict } from '../../src/crypto/text-encoding.js';
+import { base64ToBytes, base64UrlToBytes } from '../../src/formats/encoding.js';
+import { createOperationGate } from '../../src/core/operation-gate.js';
+import { verifyBytes as verifyNative } from '../../src/native/crypto.js';
+import { verifyBytes as verifyBrowser } from '../../src/crypto/browser-verification.js';
+import { listSuites } from '../../src/crypto/suite-metadata.js';
 
 const QSIG_V2_SIG_HEADER_LENGTH = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 64 + 32 + 1 + 1 + 2 + 2 + 4;
 const FORMAT_VERSION_MINOR_OFFSET = 5;
@@ -1586,6 +1589,41 @@ function buildCases(suites) {
       }
       if (!unsupportedProfileRejected) {
         throw new Error('unsupported signature profile was not rejected');
+      }
+    },
+  });
+
+  cases.push({
+    name: 'production verification adapters must return false for malformed untrusted inputs',
+    fn: async () => {
+      const message = textBytes('adapter-malformed-input-check');
+      for (const [label, verify] of [['native', verifyNative], ['browser', verifyBrowser]]) {
+        for (const { id: suiteId, lengths } of listSuites()) {
+          const signature = new Uint8Array(lengths.signature);
+          const publicKey = new Uint8Array(lengths.publicKey);
+          const contextBytes = buildContextBytes();
+          for (const malformed of [
+            { signature: new Uint8Array(lengths.signature - 1) },
+            { signature: new Uint8Array(lengths.signature + 1) },
+            { publicKey: new Uint8Array(lengths.publicKey - 1) },
+            { contextBytes: new Uint8Array(MAX_CONTEXT_BYTES + 1) },
+            { signature: null },
+            { publicKey: 'not-bytes' },
+            { contextBytes: null },
+            {},
+          ]) {
+            if (verify({ suiteId, message, signature, publicKey, contextBytes, ...malformed }) !== false) {
+              throw new Error(`${label} adapter accepted malformed input for suite ${suiteId}`);
+            }
+          }
+        }
+        let rejected = false;
+        try {
+          verify({ suiteId: SuiteId.ML_DSA_44, signatureProfileId: 0xff, message, signature: new Uint8Array(1), publicKey: new Uint8Array(1) });
+        } catch (err) {
+          rejected = err?.code === ErrorCode.E_FORMAT_VERSION;
+        }
+        if (!rejected) throw new Error(`${label} adapter did not reject an unsupported signature profile`);
       }
     },
   });

@@ -4,19 +4,19 @@ import {
   getPublicKeyFromSecret,
   getSuite,
   signBytesVerified,
-} from './algorithms.js';
-import { computeFingerprint, computeFingerprintHex } from './fingerprint.js';
-import { assertKeyLength } from './suite-metadata.js';
-import { equalsBytes, wipeBytes } from './bytes.js';
-import { ErrorCode, createError } from './errors.js';
-import { MAX_KEY_FILE_BYTES, assertBytesLimit } from './policy.js';
-import { utf8ToBytesStrict } from './text-encoding.js';
+} from './reference-pq.mjs';
+import { computeFingerprint, computeFingerprintHex } from '../../src/crypto/fingerprint.js';
+import { assertKeyLength } from '../../src/crypto/suite-metadata.js';
+import { equalsBytes, wipeBytes } from '../../src/crypto/bytes.js';
+import { ErrorCode, createError } from '../../src/crypto/errors.js';
+import { MAX_KEY_FILE_BYTES, assertBytesLimit } from '../../src/crypto/policy.js';
+import { utf8ToBytesStrict } from '../../src/crypto/text-encoding.js';
 import {
   decryptSecretKeyFile,
   encryptSecretKeyFile,
   isProtectedSecretKeyFile,
-} from './key-protection.js';
-import { packPublicKey, packSecretKey, unpackSecretKey } from '../formats/containers.js';
+} from '../../src/crypto/key-protection.js';
+import { packPublicKey, packSecretKey, unpackSecretKey } from '../../src/formats/containers.js';
 
 const IMPORT_PCT_CONTEXT = 'quantum-signer/private-key-import-pct/v1';
 const IMPORT_PCT_MESSAGE = 'quantum-signer/expanded-private-key-import-check/v1';

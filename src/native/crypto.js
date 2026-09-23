@@ -1,5 +1,5 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
-import { getSuiteMetadata, assertKeyLength } from '../crypto/suite-metadata.js';
+import { getSuiteMetadata, assertKeyLength, verificationInputsWellFormed } from '../crypto/suite-metadata.js';
 import { MAX_KEY_FILE_BYTES, assertBytesLimit } from '../crypto/policy.js';
 
 export function assertNativeRuntime() {
@@ -102,13 +102,9 @@ export function signBytesNative({ suiteId, message, privateKey, contextBytes = n
   return signature;
 }
 
-export function verifyBytes({ suiteId, signatureProfileId = 1, message, signature, publicKey, contextBytes = new Uint8Array() }) {
-  const suite = getSuiteMetadata(suiteId);
-  if (signatureProfileId !== 1) throw new Error('Unsupported signature profile.');
-  if (!(message instanceof Uint8Array)) throw new TypeError('Message must be bytes.');
-  if (!(signature instanceof Uint8Array) || signature.length !== suite.lengths.signature ||
-      !(publicKey instanceof Uint8Array) || publicKey.length !== suite.lengths.publicKey ||
-      !(contextBytes instanceof Uint8Array) || contextBytes.length > 255) return false;
+export function verifyBytes({ contextBytes = new Uint8Array(), ...args }) {
+  if (!verificationInputsWellFormed({ ...args, contextBytes })) return false;
+  const { suiteId, message, signature, publicKey } = args;
   try { return verify(null, message, { key: importPublicKey(suiteId, publicKey), context: contextBytes }, signature); }
   catch { return false; }
 }

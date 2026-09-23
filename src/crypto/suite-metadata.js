@@ -1,4 +1,5 @@
 import { ErrorCode, createError } from './errors.js';
+import { MAX_CONTEXT_BYTES } from './policy.js';
 
 export const SuiteId = Object.freeze({
   ML_DSA_44: 0x01,
@@ -7,6 +8,11 @@ export const SuiteId = Object.freeze({
   SLH_DSA_SHAKE_128S: 0x11,
   SLH_DSA_SHAKE_192S: 0x12,
   SLH_DSA_SHAKE_256S: 0x13,
+});
+
+// QSIG 2.0 pure FIPS 204/205 signing with a context string; the only profile.
+export const SignatureProfileId = Object.freeze({
+  PQ_DETACHED_PURE_CONTEXT_V2: 0x01,
 });
 
 export const DEFAULT_SUITE_ID = SuiteId.ML_DSA_87;
@@ -90,4 +96,27 @@ export function assertKeyLength(suiteId, keyBytes, kind) {
       suiteId,
     });
   }
+}
+
+// Shared by every verification adapter. Caller errors (unknown suite/profile,
+// non-byte message) throw; malformed attacker-controlled signature, key or
+// context values make verification false instead of exceptional.
+export function verificationInputsWellFormed({
+  suiteId,
+  signatureProfileId = SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2,
+  message,
+  signature,
+  publicKey,
+  contextBytes,
+}) {
+  const { lengths } = getSuiteMetadata(suiteId);
+  if (signatureProfileId !== SignatureProfileId.PQ_DETACHED_PURE_CONTEXT_V2) {
+    throw createError(ErrorCode.E_FORMAT_VERSION, { field: 'signatureProfileId', signatureProfileId });
+  }
+  if (!(message instanceof Uint8Array)) {
+    throw createError(ErrorCode.E_FORMAT_LENGTH, { field: 'message', expected: 'Uint8Array' });
+  }
+  return signature instanceof Uint8Array && signature.length === lengths.signature &&
+    publicKey instanceof Uint8Array && publicKey.length === lengths.publicKey &&
+    contextBytes instanceof Uint8Array && contextBytes.length <= MAX_CONTEXT_BYTES;
 }

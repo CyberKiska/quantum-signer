@@ -6,7 +6,7 @@ import {
   getPublicKeyFromSecret,
   signBytes,
   verifyBytes,
-} from '../src/crypto/algorithms.js';
+} from './lib/reference-pq.mjs';
 import { wipeBytes } from '../src/crypto/bytes.js';
 import { SuiteId } from '../src/crypto/suite-metadata.js';
 import { verifyBytes as verifyNative } from '../src/native/crypto.js';

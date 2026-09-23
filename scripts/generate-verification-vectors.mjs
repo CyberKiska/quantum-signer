@@ -3,7 +3,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { listSuites } from '../src/crypto/suite-metadata.js';
-import { signBytes, getPublicKeyFromSecret } from '../src/crypto/algorithms.js';
+import { signBytes, getPublicKeyFromSecret } from './lib/reference-pq.mjs';
 const vectors = [];
 for (const file of ['nist-acvp-mldsa-siggen-vectors.json', 'nist-acvp-slhdsa-siggen-vectors.json']) {
   const source = JSON.parse(await readFile(new URL(file, import.meta.url), 'utf8'));

@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, createPrivateKey } from 'node:crypto';
 import { build } from 'esbuild';
 import { listSuites } from '../src/crypto/suite-metadata.js';
-import { generateKeypair, signBytes, verifyBytes as verifyJS } from '../src/crypto/algorithms.js';
+import { generateKeypair, signBytes, verifyBytes as verifyJS } from './lib/reference-pq.mjs';
 import { generateNativeKey, importPkcs8, importLegacySecretKey, publicKeyBytes, checkPrivateKey, signBytesNative, verifyBytes } from '../src/native/crypto.js';
 import { createDetachedSignature } from '../src/native/signing.js';
 import { encryptSecretKeyFile, decryptSecretKeyFile } from '../src/crypto/key-protection.js';

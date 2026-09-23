@@ -154,7 +154,8 @@ KeyObjects. The browser exposes verification and hashing only. Browser SHA-3 and
 PQ verification use pinned JavaScript dependencies because the required complete
 suite set is not uniformly available through Web Crypto. Browser workers do not
 import private sessions, private-key protection or the reference signing adapter.
-Reference JavaScript signing/session modules exist solely for regression testing.
+The JavaScript reference signer used for cross-implementation tests lives in
+scripts/lib and is excluded from all shipped bundles by the build.
 Native KeyObjects reduce JS exposure of expanded secrets but do not provide a
 hardware boundary or guaranteed erasure of passwords, transient exports, runtime
 copies or OS memory. Native provider use is not evidence of FIPS validation.
