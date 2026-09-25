@@ -4,6 +4,8 @@ Post-quantum detached signatures with a native Node/OpenSSL signing CLI and a ve
 
 **Version: 2.1.0.** Signing runs locally through Node/OpenSSL; the browser is verification-only. The project does not claim FIPS module validation or independent security certification. See [release verification](docs/RELEASE.md) for authenticating downloaded artifacts.
 
+For agent operation, use the [Quantum Signer skill](docs/quantum-signer/SKILL.md), with exact workflows, recovery steps, and code/runtime verification evidence.
+
 ## Signing locally
 
 Use Node.js 26 or newer with ML-DSA and SLH-DSA support. From an authenticated source checkout:

@@ -25,3 +25,5 @@ examples/
 /scripts/audit-adversarial.mjs
 /spec/release-validation.txt
 !docs/*.md
+!docs/quantum-signer/SKILL.md
+!docs/quantum-signer/references/behavior.md
