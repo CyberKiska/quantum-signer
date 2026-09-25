@@ -9,7 +9,6 @@ export const MAX_TEXT_INPUT_BYTES = 8 * 1024 * 1024;
 
 export const MAX_SIGNATURE_BYTES = 64 * 1024;
 export const MAX_AUTH_METADATA_BYTES = 8 * 1024;
-export const MAX_DISPLAY_METADATA_BYTES = 4 * 1024;
 export const MAX_SIGNATURE_FILE_BYTES = 128 * 1024;
 
 export const MAX_KEY_BYTES = 16 * 1024;

@@ -75,10 +75,6 @@ assert(
   'index.html must obtain its meta CSP from the shared build-time policy'
 );
 assert(
-  sourceHtml.includes('content="%PRIVATE_KEY_OPERATIONS%"'),
-  'index.html must declare its disabled private-key capability'
-);
-assert(
   !sourceHtml.includes("default-src 'none'"),
   'index.html contains a second hand-maintained CSP instead of the shared placeholder'
 );

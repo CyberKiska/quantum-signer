@@ -21,7 +21,6 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="base-path" content="%BASE_PATH%" />
-    <meta name="private-key-operations" content="%PRIVATE_KEY_OPERATIONS%" />
     <meta name="build-commit" content="%BUILD_COMMIT%" />
     <meta
       http-equiv="Content-Security-Policy"
@@ -51,8 +50,8 @@
           <div class="context-row">
             <span>System Status</span>
             <span class="context-val status-line">
-              <span id="sys-status-dot" class="status-indicator secure"></span>
-              <span id="sys-status-text">Ready</span>
+              <span class="status-indicator secure"></span>
+              <span>Verification Only</span>
             </span>
           </div>
           <div class="context-row">
@@ -61,7 +60,7 @@
           </div>
           <div class="context-row">
             <span>Signing</span>
-            <span id="ctx-sec-fp" class="context-val">Local CLI</span>
+            <span class="context-val status-muted">Local CLI</span>
           </div>
           <button id="sidebar-selftest" class="sidebar-selftest" type="button">Run Self-test</button>
           <div class="sidebar-note">
@@ -77,7 +76,7 @@
 
       <main class="main-content">
         <div id="toast-container" class="toast-container"></div>
-        <div id="delivery-warning" class="delivery-warning hidden" role="status">
+        <div id="delivery-warning" class="delivery-warning" role="status">
           This browser verifies signatures. Use the local command line tool in the Sign tab to generate keys and sign files.
         </div>
 

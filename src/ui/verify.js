@@ -5,7 +5,6 @@ import { HashAlgId, getHashName, getSuiteName, unpackSignatureV2 } from '../form
 import { createOperationGate } from '../core/operation-gate.js';
 import {
   byId,
-  buildLegacyDisplayMetadataReviewGroup,
   formatBytes,
   readFileAsBytes,
   resetProgress,
@@ -202,9 +201,6 @@ export function setupVerifyTab(state, workerClient) {
     signatureLength: null,
     payloadDigestHex: null,
     embeddedFingerprintHex: null,
-    displayFilename: null,
-    displayFilesize: null,
-    displayCreatedAt: null,
     signatureFilename: null,
     loadedKeyMatches: null,
   };
@@ -379,24 +375,11 @@ export function setupVerifyTab(state, workerClient) {
       }
     }
 
-    const legacyDisplayGroup =
-      signaturePreview.status === 'ready'
-        ? buildLegacyDisplayMetadataReviewGroup(
-            {
-              filename: signaturePreview.displayFilename,
-              filesize: signaturePreview.displayFilesize,
-              createdAt: signaturePreview.displayCreatedAt,
-            },
-            inputPreview.status === 'ready' ? inputPreview.inputLength : null
-          )
-        : null;
-
     renderReviewGroups(
       reviewEl,
       [
         reviewedInputGroup,
         containerGroup,
-        legacyDisplayGroup,
         {
           title: 'External trust input',
           note: 'A matching key loaded independently is required for signer identity assurance.',
@@ -543,9 +526,6 @@ export function setupVerifyTab(state, workerClient) {
         signatureLength: null,
         payloadDigestHex: null,
         embeddedFingerprintHex: null,
-        displayFilename: null,
-        displayFilesize: null,
-        displayCreatedAt: null,
         signatureFilename: null,
         loadedKeyMatches: null,
       });
@@ -564,9 +544,6 @@ export function setupVerifyTab(state, workerClient) {
       signatureLength: null,
       payloadDigestHex: null,
       embeddedFingerprintHex: null,
-      displayFilename: null,
-      displayFilesize: null,
-      displayCreatedAt: null,
       signatureFilename: sigFile.name,
       loadedKeyMatches: null,
     });
@@ -592,10 +569,6 @@ export function setupVerifyTab(state, workerClient) {
         signatureLength: parsedSig.signatureLength,
         payloadDigestHex: bytesToHexLower(parsedSig.payloadDigest),
         embeddedFingerprintHex,
-        displayFilename: parsedSig.displayMetadata?.filename || null,
-        displayFilesize:
-          typeof parsedSig.displayMetadata?.filesize === 'bigint' ? parsedSig.displayMetadata.filesize.toString() : null,
-        displayCreatedAt: parsedSig.displayMetadata?.createdAt || null,
         signatureFilename: sigFile.name,
         loadedKeyMatches: deriveLoadedKeyMatches(embeddedFingerprintHex),
       });
@@ -613,9 +586,6 @@ export function setupVerifyTab(state, workerClient) {
         signatureLength: null,
         payloadDigestHex: null,
         embeddedFingerprintHex: null,
-        displayFilename: null,
-        displayFilesize: null,
-        displayCreatedAt: null,
         signatureFilename: sigFile.name,
         loadedKeyMatches: null,
       });

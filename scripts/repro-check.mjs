@@ -73,7 +73,7 @@ const second = await digestBuild();
 if (first !== second) throw new Error(`Non-reproducible build: ${first} != ${second}`);
 const expectedDigests = JSON.parse(await readFile(expectedDigestPath, 'utf8'));
 const builtManifest = JSON.parse(await readFile(path.join(distDir, 'build-manifest.json'), 'utf8'));
-const configurationKey = `${builtManifest.basePath}|${builtManifest.privateKeyOperations}`;
+const configurationKey = builtManifest.basePath;
 const expected = expectedDigests[configurationKey];
 if (!/^[0-9a-f]{64}$/u.test(expected)) throw new Error(`Missing reviewed digest for ${configurationKey}; current build: ${first}`);
 if (first !== expected) {

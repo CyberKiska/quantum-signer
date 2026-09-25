@@ -33,17 +33,11 @@ export function normalizeBuildCommit(value) {
   throw new Error('BUILD_COMMIT must be "local" or a 40-64 character lowercase hexadecimal commit id');
 }
 
-export function normalizePrivateKeyOperations(value) {
-  if (value === undefined || value === null || value === '' || value === 'disabled') return 'disabled';
-  throw new Error('Browser private-key operations have been removed. Use the native signing CLI.');
-}
-
 export async function buildProject({ minify = true, sourcemap = !minify } = {}) {
   const distDir = path.join(root, 'dist');
   const assetsDir = path.join(distDir, 'assets');
   const srcDir = path.join(root, 'src');
   const basePath = normalizeBasePath(process.env.BASE_PATH || '/');
-  const privateKeyOperations = normalizePrivateKeyOperations(process.env.PRIVATE_KEY_OPERATIONS);
   const buildCommit = normalizeBuildCommit(process.env.BUILD_COMMIT);
 
   await rm(distDir, { recursive: true, force: true });
@@ -87,7 +81,6 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
   const html = htmlTemplate
     .replaceAll('%BASE_PATH%', basePath)
     .replaceAll('%DOCUMENT_CSP%', META_DOCUMENT_CSP)
-    .replaceAll('%PRIVATE_KEY_OPERATIONS%', privateKeyOperations)
     .replaceAll('%BUILD_COMMIT%', buildCommit)
     .replaceAll('%BUILD_COMMIT_SHORT%', buildCommit === 'local' ? buildCommit : buildCommit.slice(0, 12))
     .replaceAll('%APP_INTEGRITY%', appIntegrity)
@@ -122,7 +115,6 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
     applicationVersion: packageMetadata.version,
     sourceCommit: buildCommit,
     basePath,
-    privateKeyOperations,
     artifacts,
   };
   await writeFile(

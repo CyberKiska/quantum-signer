@@ -22,16 +22,11 @@ import { setupLayout } from './ui/layout.js';
 import { setupKeysTab } from './ui/keys.js';
 import { setupVerifyTab } from './ui/verify.js';
 
+// The browser is verification-only: the only key material is a public key.
 const state = {
-  deliveryIsolated: globalThis.crossOriginIsolated === true,
-  privateKeyOperationsAllowed: false,
   keys: {
     public: null,
-    secret: null,
     transitioning: false,
-  },
-  sign: {
-    lastSignature: null,
   },
 };
 
@@ -39,10 +34,7 @@ function wipeStateBytes(appState) {
   const pub = appState.keys.public;
   if (pub?.keyBytes) wipeBytes(pub.keyBytes);
   if (pub?.fileBytes) wipeBytes(pub.fileBytes);
-  if (appState.sign.lastSignature?.bytes) wipeBytes(appState.sign.lastSignature.bytes);
   appState.keys.public = null;
-  appState.keys.secret = null;
-  appState.sign.lastSignature = null;
 }
 
 function enforceTopLevelBrowsingContext() {
@@ -89,8 +81,6 @@ async function main() {
   setupKeysTab(state);
   setupVerifyTab(state, workerClient);
 
-  const deliveryWarning = byId('delivery-warning');
-  deliveryWarning.classList.toggle('hidden', state.privateKeyOperationsAllowed);
   const selfTestBtn = byId('sidebar-selftest');
 
   selfTestBtn.addEventListener('click', async () => {

@@ -107,7 +107,6 @@ try {
     authMetaDigest,
     signature,
     authenticatedMetadata,
-    displayMetadata: {},
   });
 
   const baseline = unpackSignatureV2(signatureFile);
