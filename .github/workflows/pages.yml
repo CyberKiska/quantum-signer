@@ -49,7 +49,6 @@ jobs:
       - name: Reproducible demo build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
-          PRIVATE_KEY_OPERATIONS: disabled
           BUILD_COMMIT: ${{ github.sha }}
         run: npm run check:repro
 

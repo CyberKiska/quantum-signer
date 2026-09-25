@@ -10,45 +10,42 @@ import {
   hashFileSHA3512,
   signBytes,
   verifyBytes,
-} from './algorithms.js';
-import { computeFingerprintBytes } from './fingerprint.js';
+} from './reference-pq.mjs';
+import { computeFingerprintBytes } from '../../src/crypto/fingerprint.js';
 import {
   MAX_CONTEXT_BYTES,
   MAX_PAYLOAD_FILE_BYTES,
   MAX_SIGNATURE_BYTES,
-} from './policy.js';
-import { createSecretSessionManager } from './secret-session.js';
-import { normalizeMetadata } from './validate.js';
-import { ErrorCode } from './errors.js';
-import { finalizePayloadVerification, finalizeVerification } from './verify-policy.js';
+} from '../../src/crypto/policy.js';
+import { ErrorCode } from '../../src/crypto/errors.js';
+import { finalizePayloadVerification, finalizeVerification } from '../../src/crypto/verify-policy.js';
 import {
   AuthDigestAlgId,
   FingerprintAlgId,
   HashAlgId,
   KEY_FORMAT_VERSION_MAJOR,
   KEY_FORMAT_VERSION_MINOR,
-  MetadataTag,
   QSIG_FORMAT_VERSION_MAJOR,
   QSIG_FORMAT_VERSION_MINOR,
   SignatureProfileId,
   SuiteId,
   buildTBSV2,
   computeAuthMetaDigestV2,
-  metadataToPlain,
   packPublicKey,
   packSecretKey,
   packAuthenticatedMetadataV2,
-  packDisplayMetadataV2,
   packSignatureV2,
   packSignerFingerprint,
   unpackPublicKey,
   unpackSecretKey,
   unpackSignatureV2,
-} from '../formats/containers.js';
-import { equalsBytes, wipeBytes } from './bytes.js';
-import { utf8ToBytesStrict } from './text-encoding.js';
-import { base64ToBytes, base64UrlToBytes } from '../formats/encoding.js';
-import { createOperationGate } from '../core/operation-gate.js';
+} from '../../src/formats/containers.js';
+import { equalsBytes, wipeBytes } from '../../src/crypto/bytes.js';
+import { utf8ToBytesStrict } from '../../src/crypto/text-encoding.js';
+import { createOperationGate } from '../../src/core/operation-gate.js';
+import { verifyBytes as verifyNative } from '../../src/native/crypto.js';
+import { verifyBytes as verifyBrowser } from '../../src/crypto/browser-verification.js';
+import { listSuites } from '../../src/crypto/suite-metadata.js';
 
 const QSIG_V2_SIG_HEADER_LENGTH = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + 64 + 32 + 1 + 1 + 2 + 2 + 4;
 const FORMAT_VERSION_MINOR_OFFSET = 5;
@@ -156,7 +153,6 @@ function buildSignatureContainer({ suiteId, payloadBytes, secretKey, publicKey, 
     signature,
     ctx: QSIG_DEFAULT_CTX,
     authenticatedMetadata,
-    displayMetadata: {},
   });
 
   wipeBytes(authMetaBytes);
@@ -327,7 +323,7 @@ function buildCases(suites) {
   }
 
   cases.push({
-    name: 'unsigned display metadata must be rejected on pack and parse',
+    name: 'unsigned display metadata must be rejected on parse',
     fn: async () => {
       const suiteId = SuiteId.ML_DSA_44;
       const keys = generateKeypair(suiteId);
@@ -338,30 +334,8 @@ function buildCases(suites) {
         secretKey: keys.secretKey,
         publicKey: keys.publicKey,
       });
-      const parsed = unpackSignatureV2(sigFile);
-
-      let packFailed = false;
-      try {
-        packSignatureV2({
-          suiteId: parsed.suiteId,
-          signatureProfileId: parsed.signatureProfileId,
-          payloadDigestAlgId: parsed.payloadDigestAlgId,
-          authDigestAlgId: parsed.authDigestAlgId,
-          payloadDigest: parsed.payloadDigest,
-          authMetaDigest: parsed.authMetaDigest,
-          signature: parsed.signature,
-          ctx: parsed.ctx,
-          authenticatedMetadata: parsed.authenticatedMetadata,
-          displayMetadata: { filename: 'forged-name.pdf' },
-        });
-      } catch (err) {
-        packFailed =
-          err?.code === 'E_FORMAT_TLV' &&
-          err?.details?.reason === 'unsigned_display_metadata_not_supported';
-      }
-
       const { displayMetaOffset } = getDisplayMetadataOffsets(sigFile);
-      const extension = Uint8Array.of(MetadataTag.FILENAME, 0x01, 0x00, 0x78);
+      const extension = Uint8Array.of(0x01, 0x01, 0x00, 0x78);
       const injected = new Uint8Array(sigFile.length + extension.length);
       injected.set(sigFile.subarray(0, displayMetaOffset), 0);
       injected.set(extension, displayMetaOffset);
@@ -377,7 +351,7 @@ function buildCases(suites) {
           err?.details?.reason === 'unsigned_display_metadata_not_supported';
       }
 
-      if (!packFailed || !parseFailed) {
+      if (!parseFailed) {
         throw new Error('unsigned display metadata was accepted');
       }
     },
@@ -560,7 +534,7 @@ function buildCases(suites) {
     });
 
     cases.push({
-      name: `${prefix}: embedded-only verification must stay valid with warning`,
+      name: `${prefix}: embedded-only verification must report integrity only, never valid`,
       fn: async () => {
         const keys = generateKeypair(suiteId);
         const payload = textBytes('embedded-only-policy-check');
@@ -577,8 +551,11 @@ function buildCases(suites) {
           inputLength: payload.length,
         });
 
-        if (!result.valid || !result.cryptoValid || result.trusted !== false) {
-          throw new Error('embedded-only verification unexpectedly failed');
+        if (result.valid !== false || result.integrityValid !== true || !result.cryptoValid || result.trusted !== false) {
+          throw new Error('embedded-only verification was not reported as integrity-only');
+        }
+        if (result.code !== ErrorCode.E_SIGNER_UNTRUSTED) {
+          throw new Error('embedded-only verification did not carry E_SIGNER_UNTRUSTED');
         }
         if (result.trustSource !== 'embedded-only' || result.verifiedKeySource !== 'signature') {
           throw new Error('embedded-only verification returned wrong trust semantics');
@@ -1233,7 +1210,7 @@ function buildCases(suites) {
       });
       const tampered = Uint8Array.from(sigFile);
       const { authMetaOffset } = getAuthMetadataOffsets(tampered);
-      tampered[authMetaOffset] = MetadataTag.FILENAME;
+      tampered[authMetaOffset] = 0x01; // former display-only filename tag
 
       let failed = false;
       try {
@@ -1363,85 +1340,6 @@ function buildCases(suites) {
 
       if (!failed) {
         throw new Error('invalid UTF-8 in stored context unexpectedly parsed');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'non-canonical createdAt string must be rejected during normalization',
-    fn: async () => {
-      let failed = false;
-      try {
-        normalizeMetadata({ createdAt: '2025-01-01 00:00:00.000Z' });
-      } catch (err) {
-        failed = err?.code === 'E_FORMAT_TLV' && err?.details?.reason === 'invalid_iso8601';
-      }
-      if (!failed) {
-        throw new Error('non-canonical createdAt unexpectedly normalized');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'out-of-range createdAt values must be contained as application errors',
-    fn: async () => {
-      for (const createdAt of [Number.MAX_VALUE, new Date(Number.NaN)]) {
-        let failed = false;
-        try {
-          normalizeMetadata({ createdAt });
-        } catch (err) {
-          failed = err?.code === 'E_FORMAT_TLV' && err?.details?.field === 'createdAt';
-        }
-        if (!failed) throw new Error('out-of-range createdAt escaped validation or exposed a native error');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'metadataToPlain must reject unsafe u64 filesize conversion',
-    fn: async () => {
-      const safe = metadataToPlain({ filesize: BigInt(Number.MAX_SAFE_INTEGER) });
-      if (safe.filesize !== Number.MAX_SAFE_INTEGER) {
-        throw new Error('maximum safe u64 filesize did not convert exactly');
-      }
-
-      for (const filesize of [
-        BigInt(Number.MAX_SAFE_INTEGER) + 1n,
-        Number.MAX_SAFE_INTEGER + 1,
-      ]) {
-        let failed = false;
-        try {
-          metadataToPlain({ filesize });
-        } catch (err) {
-          failed =
-            err?.code === 'E_FORMAT_LENGTH' &&
-            err?.details?.field === 'filesize' &&
-            err?.details?.reason === 'unsafe_integer';
-        }
-        if (!failed) throw new Error(`unsafe filesize unexpectedly converted: ${String(filesize)}`);
-      }
-    },
-  });
-
-  cases.push({
-    name: 'display metadata packer must reject imprecise numeric u64 values',
-    fn: async () => {
-      const encoded = packDisplayMetadataV2({ filesize: Number.MAX_SAFE_INTEGER });
-      if (!(encoded instanceof Uint8Array) || encoded.length === 0) {
-        throw new Error('maximum safe numeric filesize did not encode');
-      }
-
-      for (const filesize of [Number.MAX_SAFE_INTEGER + 1, 1.5, Number.NaN]) {
-        let failed = false;
-        try {
-          packDisplayMetadataV2({ filesize });
-        } catch (err) {
-          failed =
-            err?.code === 'E_FORMAT_LENGTH' &&
-            err?.details?.field === 'filesize' &&
-            err?.details?.reason === 'unsafe_integer';
-        }
-        if (!failed) throw new Error(`imprecise numeric filesize unexpectedly encoded: ${String(filesize)}`);
       }
     },
   });
@@ -1591,6 +1489,41 @@ function buildCases(suites) {
   });
 
   cases.push({
+    name: 'production verification adapters must return false for malformed untrusted inputs',
+    fn: async () => {
+      const message = textBytes('adapter-malformed-input-check');
+      for (const [label, verify] of [['native', verifyNative], ['browser', verifyBrowser]]) {
+        for (const { id: suiteId, lengths } of listSuites()) {
+          const signature = new Uint8Array(lengths.signature);
+          const publicKey = new Uint8Array(lengths.publicKey);
+          const contextBytes = buildContextBytes();
+          for (const malformed of [
+            { signature: new Uint8Array(lengths.signature - 1) },
+            { signature: new Uint8Array(lengths.signature + 1) },
+            { publicKey: new Uint8Array(lengths.publicKey - 1) },
+            { contextBytes: new Uint8Array(MAX_CONTEXT_BYTES + 1) },
+            { signature: null },
+            { publicKey: 'not-bytes' },
+            { contextBytes: null },
+            {},
+          ]) {
+            if (verify({ suiteId, message, signature, publicKey, contextBytes, ...malformed }) !== false) {
+              throw new Error(`${label} adapter accepted malformed input for suite ${suiteId}`);
+            }
+          }
+        }
+        let rejected = false;
+        try {
+          verify({ suiteId: SuiteId.ML_DSA_44, signatureProfileId: 0xff, message, signature: new Uint8Array(1), publicKey: new Uint8Array(1) });
+        } catch (err) {
+          rejected = err?.code === ErrorCode.E_FORMAT_VERSION;
+        }
+        if (!rejected) throw new Error(`${label} adapter did not reject an unsupported signature profile`);
+      }
+    },
+  });
+
+  cases.push({
     name: 'oversized signature bytes must be rejected',
     fn: async () => {
       const signerPublicKey = new Uint8Array(getSuite(SuiteId.ML_DSA_44).signer.lengths.publicKey);
@@ -1616,7 +1549,6 @@ function buildCases(suites) {
           signature: new Uint8Array(MAX_SIGNATURE_BYTES + 1),
           ctx: QSIG_DEFAULT_CTX,
           authenticatedMetadata,
-          displayMetadata: {},
         });
       } catch (err) {
         failed =
@@ -1659,227 +1591,6 @@ function buildCases(suites) {
   });
 
   cases.push({
-    name: 'encrypted secret session export must round-trip',
-    fn: async () => {
-      const manager = createSecretSessionManager();
-      const importedManager = createSecretSessionManager();
-      const session = manager.generateSession(SuiteId.ML_DSA_65);
-      const authorization = manager.authorizeSecretKeyExport(session.sessionHandle);
-      const exported = await manager.exportSecretKeyFile(
-        session.sessionHandle,
-        authorization.exportConsentToken,
-        { passphrase: 'self-test private key passphrase' }
-      );
-      const imported = await importedManager.importSecretKeyFile(
-        exported,
-        'self-test private key passphrase'
-      );
-      const sameSuite = imported.suiteId === session.suiteId;
-      const sameFingerprint = imported.fingerprintHex === session.fingerprintHex;
-
-      wipeBytes(exported);
-      manager.clearAllSessions();
-      importedManager.clearAllSessions();
-
-      if (!sameSuite || !sameFingerprint) {
-        throw new Error('exported secret key did not round-trip to stored public key');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'private-key import PCT must accept a valid expanded ML-DSA key',
-    fn: async () => {
-      const keys = generateKeypair(SuiteId.ML_DSA_44);
-      const secretKeyFile = packSecretKey({ suiteId: SuiteId.ML_DSA_44, keyBytes: keys.secretKey });
-      const manager = createSecretSessionManager();
-      let importedPublic;
-      try {
-        const imported = await manager.importSecretKeyFile(secretKeyFile);
-        importedPublic = unpackPublicKey(imported.publicKeyFile);
-        if (bytesToHexLower(importedPublic.keyBytes) !== bytesToHexLower(keys.publicKey)) {
-          throw new Error('import PCT returned an unexpected ML-DSA public key');
-        }
-      } finally {
-        manager.clearAllSessions();
-        wipeBytes(importedPublic?.keyBytes);
-        wipeBytes(secretKeyFile);
-        wipeBytes(keys.secretKey);
-        wipeBytes(keys.publicKey);
-      }
-    },
-  });
-
-  cases.push({
-    name: 'secret session export must require consent token',
-    fn: async () => {
-      const manager = createSecretSessionManager();
-      const session = manager.generateSession(SuiteId.ML_DSA_44);
-      manager.authorizeSecretKeyExport(session.sessionHandle);
-      let failed = false;
-      try {
-        await manager.exportSecretKeyFile(session.sessionHandle);
-      } catch (err) {
-        failed = err?.code === ErrorCode.E_EXPORT_AUTH && err?.details?.reason === 'missing';
-      }
-
-      manager.clearAllSessions();
-
-      if (!failed) {
-        throw new Error('secret export unexpectedly succeeded without consent token');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'secret session export must reject wrong consent token',
-    fn: async () => {
-      const manager = createSecretSessionManager();
-      const session = manager.generateSession(SuiteId.ML_DSA_44);
-      manager.authorizeSecretKeyExport(session.sessionHandle);
-      let failed = false;
-      try {
-        await manager.exportSecretKeyFile(session.sessionHandle, 'export-consent-wrong');
-      } catch (err) {
-        failed = err?.code === ErrorCode.E_EXPORT_AUTH && err?.details?.reason === 'mismatch';
-      }
-
-      manager.clearAllSessions();
-
-      if (!failed) {
-        throw new Error('secret export unexpectedly succeeded with wrong consent token');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'secret session handles must not use legacy sequential format',
-    fn: async () => {
-      const manager = createSecretSessionManager();
-      const sessionA = manager.generateSession(SuiteId.ML_DSA_44);
-      const sessionB = manager.generateSession(SuiteId.ML_DSA_44);
-
-      manager.clearAllSessions();
-
-      if (/^secret-session-\d+$/.test(sessionA.sessionHandle) || /^secret-session-\d+$/.test(sessionB.sessionHandle)) {
-        throw new Error('secret session handle still uses sequential format');
-      }
-      if (sessionA.sessionHandle === sessionB.sessionHandle) {
-        throw new Error('secret session handles unexpectedly collided');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'cleared secret session must reject access',
-    fn: async () => {
-      const manager = createSecretSessionManager();
-      const session = manager.generateSession(SuiteId.ML_DSA_44);
-      const cleared = manager.clearSession(session.sessionHandle);
-
-      let failed = false;
-      try {
-        manager.getSession(session.sessionHandle);
-      } catch (_err) {
-        failed = true;
-      }
-
-      manager.clearAllSessions();
-
-      if (!cleared || !failed) {
-        throw new Error('cleared secret session remained accessible');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'secret session clear must defer wiping until active lease release',
-    fn: async () => {
-      const manager = createSecretSessionManager();
-      const sessionSummary = manager.generateSession(SuiteId.ML_DSA_44);
-      const lease = manager.acquireSession(sessionSummary.sessionHandle);
-      const secretReference = lease.session.secretKey;
-      const publicReference = lease.session.publicKey;
-      if (!secretReference.some((byte) => byte !== 0) || !publicReference.some((byte) => byte !== 0)) {
-        throw new Error('generated session unexpectedly contains all-zero key material');
-      }
-
-      if (!manager.clearSession(sessionSummary.sessionHandle)) {
-        throw new Error('leased session clear was not accepted');
-      }
-      if (!secretReference.some((byte) => byte !== 0) || !publicReference.some((byte) => byte !== 0)) {
-        throw new Error('leased key material was wiped during an active operation');
-      }
-
-      let inaccessible = false;
-      try {
-        manager.getSession(sessionSummary.sessionHandle);
-      } catch (_err) {
-        inaccessible = true;
-      }
-      if (!inaccessible) throw new Error('cleared leased session accepted a new operation');
-
-      lease.release();
-      if (secretReference.some((byte) => byte !== 0) || publicReference.some((byte) => byte !== 0)) {
-        throw new Error('deferred session wipe did not run after lease release');
-      }
-    },
-  });
-
-  cases.push({
-    name: 'private-key import PCT must reject an inconsistent expanded ML-DSA key',
-    fn: async () => {
-      const keys = generateKeypair(SuiteId.ML_DSA_44);
-      const corruptedSecret = Uint8Array.from(keys.secretKey);
-      corruptedSecret[64] ^= 0x01;
-      const secretKeyFile = packSecretKey({ suiteId: SuiteId.ML_DSA_44, keyBytes: corruptedSecret });
-      const manager = createSecretSessionManager();
-      let rejected = false;
-      try {
-        await manager.importSecretKeyFile(secretKeyFile);
-      } catch (err) {
-        rejected = err?.code === ErrorCode.E_KEY_CONSISTENCY;
-      } finally {
-        manager.clearAllSessions();
-        wipeBytes(secretKeyFile);
-        wipeBytes(corruptedSecret);
-        wipeBytes(keys.secretKey);
-        wipeBytes(keys.publicKey);
-      }
-      if (!rejected) throw new Error('inconsistent expanded ML-DSA key was not rejected during import');
-    },
-  });
-
-  if (suites.includes(SuiteId.SLH_DSA_SHAKE_128S)) {
-    cases.push({
-      name: 'private-key import PCT must reject an inconsistent expanded SLH-DSA key',
-      fn: async () => {
-        const keys = generateKeypair(SuiteId.SLH_DSA_SHAKE_128S);
-        const corruptedSecret = Uint8Array.from(keys.secretKey);
-        corruptedSecret[corruptedSecret.length - 1] ^= 0x01;
-        const secretKeyFile = packSecretKey({
-          suiteId: SuiteId.SLH_DSA_SHAKE_128S,
-          keyBytes: corruptedSecret,
-        });
-        const manager = createSecretSessionManager();
-        let rejected = false;
-        try {
-          await manager.importSecretKeyFile(secretKeyFile);
-        } catch (err) {
-          rejected = err?.code === ErrorCode.E_KEY_CONSISTENCY;
-        } finally {
-          manager.clearAllSessions();
-          wipeBytes(secretKeyFile);
-          wipeBytes(corruptedSecret);
-          wipeBytes(keys.secretKey);
-          wipeBytes(keys.publicKey);
-        }
-        if (!rejected) throw new Error('inconsistent expanded SLH-DSA key was not rejected during import');
-      },
-    });
-  }
-
-  cases.push({
     name: 'strict UTF-8 input encoding must reject unpaired surrogates',
     fn: async () => {
       let rejected = false;
@@ -1891,33 +1602,6 @@ function buildCases(suites) {
       if (!rejected) throw new Error('unpaired surrogate unexpectedly encoded');
       const valid = utf8ToBytesStrict('A\ud83d\ude80', 'text');
       if (valid.length !== 5) throw new Error('valid surrogate pair encoded to unexpected length');
-    },
-  });
-
-  cases.push({
-    name: 'base64 decoders must reject non-canonical alphabets and pad bits',
-    fn: async () => {
-      if (base64ToBytes('AA==')[0] !== 0 || base64UrlToBytes('_w')[0] !== 0xff) {
-        throw new Error('canonical base64 decoding failed');
-      }
-      for (const value of ['AB==', 'AA']) {
-        let rejected = false;
-        try {
-          base64ToBytes(value);
-        } catch (_err) {
-          rejected = true;
-        }
-        if (!rejected) throw new Error(`non-canonical base64 unexpectedly accepted: ${value}`);
-      }
-      for (const value of ['/w', '_x']) {
-        let rejected = false;
-        try {
-          base64UrlToBytes(value);
-        } catch (_err) {
-          rejected = true;
-        }
-        if (!rejected) throw new Error(`non-canonical base64url unexpectedly accepted: ${value}`);
-      }
     },
   });
 

@@ -9,6 +9,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, '..');
 
+// Browser bundles must never contain private-key code or test-only references.
+const PRIVATE_OR_TEST_INPUT = /(?:^|\/)(?:scripts\/|src\/native\/|src\/crypto\/key-protection\.js)/u;
+
 export function normalizeBasePath(value) {
   if (!value || value.trim() === '') return '/';
   let out = value.trim();
@@ -30,17 +33,11 @@ export function normalizeBuildCommit(value) {
   throw new Error('BUILD_COMMIT must be "local" or a 40-64 character lowercase hexadecimal commit id');
 }
 
-export function normalizePrivateKeyOperations(value) {
-  if (value === undefined || value === null || value === '' || value === 'disabled') return 'disabled';
-  throw new Error('Browser private-key operations have been removed. Use the native signing CLI.');
-}
-
 export async function buildProject({ minify = true, sourcemap = !minify } = {}) {
   const distDir = path.join(root, 'dist');
   const assetsDir = path.join(distDir, 'assets');
   const srcDir = path.join(root, 'src');
   const basePath = normalizeBasePath(process.env.BASE_PATH || '/');
-  const privateKeyOperations = normalizePrivateKeyOperations(process.env.PRIVATE_KEY_OPERATIONS);
   const buildCommit = normalizeBuildCommit(process.env.BUILD_COMMIT);
 
   await rm(distDir, { recursive: true, force: true });
@@ -54,8 +51,7 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
     metafile: true, logLevel: 'silent',
   });
   const workerSource = workerBuild.outputFiles[0].text;
-  const forbiddenWorkerInputs = Object.keys(workerBuild.metafile.inputs).filter(input =>
-    /src\/(?:native\/|crypto\/(?:algorithms|secret-session|key-protection|selftest)\.js)/u.test(input));
+  const forbiddenWorkerInputs = Object.keys(workerBuild.metafile.inputs).filter(input => PRIVATE_OR_TEST_INPUT.test(input));
   if (forbiddenWorkerInputs.length) throw new Error(`Private-key entry point in browser worker: ${forbiddenWorkerInputs.join(', ')}`);
   if (Buffer.byteLength(workerSource) > 256 * 1024) throw new Error('Verification worker exceeds 256 KiB');
   const buildResult = await build({
@@ -67,7 +63,7 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
   const appOutput = Object.entries(buildResult.metafile.outputs).find(([, output]) => output.entryPoint?.endsWith('src/main.js'));
   if (!appOutput) throw new Error('Missing app entry point');
   const forbiddenAppInputs = Object.keys(appOutput[1].inputs).filter(input =>
-    input.includes('@noble/post-quantum') || /src\/(?:native\/|crypto\/(?:algorithms|secret-session|key-protection|selftest)\.js)/u.test(input));
+    input.includes('@noble/post-quantum') || PRIVATE_OR_TEST_INPUT.test(input));
   if (forbiddenAppInputs.length) throw new Error(`Private-key entry point in UI: ${forbiddenAppInputs.join(', ')}`);
   if (minify && appOutput[1].bytes > 384 * 1024) throw new Error('App and embedded worker exceed 384 KiB');
 
@@ -85,7 +81,6 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
   const html = htmlTemplate
     .replaceAll('%BASE_PATH%', basePath)
     .replaceAll('%DOCUMENT_CSP%', META_DOCUMENT_CSP)
-    .replaceAll('%PRIVATE_KEY_OPERATIONS%', privateKeyOperations)
     .replaceAll('%BUILD_COMMIT%', buildCommit)
     .replaceAll('%BUILD_COMMIT_SHORT%', buildCommit === 'local' ? buildCommit : buildCommit.slice(0, 12))
     .replaceAll('%APP_INTEGRITY%', appIntegrity)
@@ -120,7 +115,6 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
     applicationVersion: packageMetadata.version,
     sourceCommit: buildCommit,
     basePath,
-    privateKeyOperations,
     artifacts,
   };
   await writeFile(

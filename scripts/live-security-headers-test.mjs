@@ -74,13 +74,7 @@ assertStandardHeaders(documentResponse, { skipHsts: loopbackHttp });
 const documentType = documentResponse.headers.get('Content-Type') || '';
 assert(documentType.toLowerCase().startsWith('text/html'), `document has unsafe MIME type: ${documentType}`);
 const documentHtml = await documentResponse.text();
-const expectedPrivateKeyProfile = process.env.EXPECTED_PRIVATE_KEY_OPERATIONS || 'disabled';
-assert(
-  documentHtml.includes(
-    `<meta name="private-key-operations" content="${expectedPrivateKeyProfile}" />`
-  ),
-  `document does not declare the expected ${expectedPrivateKeyProfile} private-key profile`
-);
+assert(documentHtml.includes('Verification Only'), 'document is not the verification-only application');
 assert(!documentHtml.includes('%DOCUMENT_CSP%'), 'document contains an unreplaced CSP placeholder');
 
 const appUrl = new URL('assets/app.js', deploymentUrl);

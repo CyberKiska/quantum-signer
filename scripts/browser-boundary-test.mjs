@@ -50,10 +50,22 @@ for (const suite of listSuites()) {
   const valid = await call('VERIFY_FILE', params);
   assert(valid.ok && valid.result.valid && valid.result.trusted, suite.name);
   const embedded = await call('VERIFY_FILE', { ...params, publicKeyFile: null });
-  assert(embedded.result.valid && !embedded.result.trusted);
+  assert(!embedded.result.valid && embedded.result.integrityValid && !embedded.result.trusted &&
+    embedded.result.code === 'E_SIGNER_UNTRUSTED', 'embedded-only must be integrity-only');
   const wrong = await call('VERIFY_FILE', { ...params, file: new Blob(['wrong']) });
-  assert(!wrong.result.valid && !wrong.result.trusted);
+  assert(!wrong.result.valid && !wrong.result.integrityValid && !wrong.result.trusted);
   assert.equal((await call('VERIFY_FILE', { ...params, publicKeyFile: {} })).ok, false);
+  // Sampled one-bit mutations through the real browser worker (noble verifier).
+  const step = Math.max(1, Math.floor(sigFile.length / 48));
+  for (let offset = 0; offset < sigFile.length; offset += offset < 160 ? 3 : step) {
+    const mutated = Uint8Array.from(sigFile);
+    mutated[offset] ^= 1 << (offset % 8);
+    for (const keyFile of [publicKeyFile, null]) {
+      const response = await call('VERIFY_FILE', { ...params, sigFile: mutated, publicKeyFile: keyFile });
+      assert(!response.ok || (!response.result.valid && !response.result.integrityValid),
+        `${suite.name}: browser worker accepted a mutation at offset ${offset}`);
+    }
+  }
 }
 const failed = await worker({ corruptKat: true });
 assert.equal((await failed('SELFTEST')).ok, false);

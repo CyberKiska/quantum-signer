@@ -1,12 +1,10 @@
 import { sha3_256 } from '#crypto/hashes';
 import { ErrorCode, createError } from '../crypto/errors.js';
 import { equalsBytes, wipeBytes } from '../crypto/bytes.js';
-import { normalizeCanonicalUtcIso8601 } from '../crypto/time.js';
-import { SuiteId, getSuiteWireLengths } from '../crypto/suite-metadata.js';
+import { SignatureProfileId, SuiteId, getSuiteWireLengths, listSuites } from '../crypto/suite-metadata.js';
 import {
   MAX_AUTH_METADATA_BYTES,
   MAX_CONTEXT_BYTES,
-  MAX_DISPLAY_METADATA_BYTES,
   MAX_KEY_BYTES,
   MAX_KEY_FILE_BYTES,
   MAX_SIGNATURE_BYTES,
@@ -31,7 +29,7 @@ export const MAGIC_PQSK = utf8ToBytes('PQSK');
 export const MAGIC_TBS = utf8ToBytes('QSTB');
 const QSIG_V2_CONTEXT_BYTES = utf8ToBytes(QSIG_V2_CONTEXT);
 
-export { SuiteId };
+export { SignatureProfileId, SuiteId };
 
 export const HashAlgId = Object.freeze({
   SHA3_512: 0x01,
@@ -41,22 +39,11 @@ export const FingerprintAlgId = Object.freeze({
   SHA3_256: 0x01,
 });
 
-export const SignatureProfileId = Object.freeze({
-  PQ_DETACHED_PURE_CONTEXT_V2: 0x01,
-});
-
 export const AuthDigestAlgId = Object.freeze({
   SHA3_256: 0x01,
 });
 
-export const SUITE_NAMES = Object.freeze({
-  [SuiteId.ML_DSA_44]: 'ML-DSA-44',
-  [SuiteId.ML_DSA_65]: 'ML-DSA-65',
-  [SuiteId.ML_DSA_87]: 'ML-DSA-87',
-  [SuiteId.SLH_DSA_SHAKE_128S]: 'SLH-DSA-SHAKE-128s',
-  [SuiteId.SLH_DSA_SHAKE_192S]: 'SLH-DSA-SHAKE-192s',
-  [SuiteId.SLH_DSA_SHAKE_256S]: 'SLH-DSA-SHAKE-256s',
-});
+export const SUITE_NAMES = Object.freeze(Object.fromEntries(listSuites().map((suite) => [suite.id, suite.name])));
 
 export const HASH_NAMES = Object.freeze({
   [HashAlgId.SHA3_512]: 'SHA3-512',
@@ -79,17 +66,10 @@ export const AUTH_META_DIGEST_LENGTH = 32;
 export const SIGNER_FINGERPRINT_DIGEST_LENGTH = 32;
 export const SIGNER_FINGERPRINT_RECORD_LENGTH = 1 + SIGNER_FINGERPRINT_DIGEST_LENGTH;
 
-export const SigFlags = Object.freeze({
-  CTX_PRESENT: 1 << 0,
-  FILENAME_PRESENT: 1 << 1,
-  FILESIZE_PRESENT: 1 << 2,
-  CREATED_AT_PRESENT: 1 << 3,
-});
+// Bit 0 (context present) is the only flag QSIG 2.0 accepts; it is mandatory.
+const SIG_FLAG_CTX_PRESENT = 0x0001;
 
 export const MetadataTag = Object.freeze({
-  FILENAME: 0x01,
-  FILESIZE: 0x02,
-  CREATED_AT: 0x03,
   SIGNER_PUBLIC_KEY: 0x10,
   SIGNER_FINGERPRINT: 0x11,
 });
@@ -98,21 +78,9 @@ const AUTH_METADATA_TAGS = new Set([
   MetadataTag.SIGNER_PUBLIC_KEY,
   MetadataTag.SIGNER_FINGERPRINT,
 ]);
-const DISPLAY_METADATA_TAGS = new Set([
-  MetadataTag.FILENAME,
-  MetadataTag.FILESIZE,
-  MetadataTag.CREATED_AT,
-]);
-// QSIG v2 previously reserved flags and a length-delimited area for display
-// metadata. Those bytes are outside the signed TBS, so accepting them would let
-// an attacker relabel an otherwise valid signature. Keep the exported flag
-// values reserved for wire-format diagnostics, but accept only CTX_PRESENT.
-const KNOWN_SIG_FLAGS = SigFlags.CTX_PRESENT;
-
 const U32_MAX = 0xffffffff;
 const U16_MAX = 0xffff;
 const U8_MAX = 0xff;
-const U64_MAX = 0xffffffffffffffffn;
 function concatBytes(arrays) {
   let total = 0;
   for (const bytes of arrays) total += bytes.length;
@@ -154,37 +122,6 @@ function ensureU32(value, field) {
   if (!Number.isInteger(value) || value < 0 || value > U32_MAX) {
     throw createError(ErrorCode.E_FORMAT_LENGTH, { field, value });
   }
-}
-
-function ensureU64(value, field) {
-  if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value)) {
-      throw createError(ErrorCode.E_FORMAT_LENGTH, {
-        field,
-        reason: 'unsafe_integer',
-        value: String(value),
-      });
-    }
-    value = BigInt(value);
-  }
-  if (typeof value !== 'bigint' || value < 0n || value > U64_MAX) {
-    throw createError(ErrorCode.E_FORMAT_LENGTH, { field, value: String(value) });
-  }
-  return value;
-}
-
-function writeU64LE(view, offset, value) {
-  const normalized = ensureU64(value, 'u64');
-  const lo = Number(normalized & 0xffffffffn);
-  const hi = Number((normalized >> 32n) & 0xffffffffn);
-  view.setUint32(offset, lo, true);
-  view.setUint32(offset + 4, hi, true);
-}
-
-function readU64LE(view, offset) {
-  const lo = BigInt(view.getUint32(offset, true));
-  const hi = BigInt(view.getUint32(offset + 4, true));
-  return (hi << 32n) | lo;
 }
 
 class Reader {
@@ -242,39 +179,6 @@ function decodeUtf8(bytes) {
   } catch (_err) {
     throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'invalid_utf8' });
   }
-}
-
-function normalizeIso8601(value) {
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_empty' });
-    }
-    try {
-      return normalizeCanonicalUtcIso8601(trimmed);
-    } catch (_err) {
-      throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid' });
-    }
-  }
-  if (typeof value === 'number' || typeof value === 'bigint') {
-    const seconds = Number(value);
-    if (!Number.isFinite(seconds)) {
-      throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid_epoch' });
-    }
-    try {
-      return new Date(Math.trunc(seconds) * 1000).toISOString();
-    } catch (_err) {
-      throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid_epoch' });
-    }
-  }
-  if (value instanceof Date) {
-    try {
-      return value.toISOString();
-    } catch (_err) {
-      throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid' });
-    }
-  }
-  throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid_type' });
 }
 
 function encodeTLV(tag, valueBytes) {
@@ -414,29 +318,11 @@ export function unpackSignerFingerprint(record) {
 function buildMetadataTLV(metadata = {}) {
   const records = [];
 
-  if (metadata.filename !== undefined && metadata.filename !== null && metadata.filename !== '') {
-    const nameBytes = utf8ToBytes(metadata.filename);
-    records.push(encodeTLV(MetadataTag.FILENAME, nameBytes));
-  }
-
-  if (metadata.filesize !== undefined && metadata.filesize !== null) {
-    const sizeValue = ensureU64(metadata.filesize, 'filesize');
-    const value = new Uint8Array(8);
-    const view = new DataView(value.buffer);
-    writeU64LE(view, 0, sizeValue);
-    records.push(encodeTLV(MetadataTag.FILESIZE, value));
-  }
-
-  if (metadata.createdAt !== undefined && metadata.createdAt !== null) {
-    const createdAtIso = normalizeIso8601(metadata.createdAt);
-    records.push(encodeTLV(MetadataTag.CREATED_AT, utf8ToBytes(createdAtIso)));
-  }
-
   if (metadata.signerPublicKey instanceof Uint8Array && metadata.signerPublicKey.length > 0) {
     records.push(encodeTLV(MetadataTag.SIGNER_PUBLIC_KEY, metadata.signerPublicKey));
   }
 
-  const signerFingerprint = metadata.signerFingerprint ?? metadata.signerKid;
+  const { signerFingerprint } = metadata;
   if (signerFingerprint instanceof Uint8Array && signerFingerprint.length > 0) {
     const parsedFp = unpackSignerFingerprint(signerFingerprint);
     records.push(encodeTLV(MetadataTag.SIGNER_FINGERPRINT, packSignerFingerprint(parsedFp)));
@@ -469,19 +355,6 @@ export function packAuthenticatedMetadataV2(metadata = {}) {
   return bytes;
 }
 
-export function packDisplayMetadataV2(metadata = {}) {
-  const displayMetadata = {
-    filename: metadata.filename,
-    filesize: metadata.filesize,
-    createdAt: metadata.createdAt,
-  };
-  const bytes = buildMetadataTLV(displayMetadata);
-  assertMaxLength(bytes.length, MAX_DISPLAY_METADATA_BYTES, 'displayMetaLen', ErrorCode.E_FORMAT_LENGTH);
-  const records = decodeTLVBlock(bytes);
-  ensureOnlyAllowedTags(records, DISPLAY_METADATA_TAGS, 'displayMeta');
-  return bytes;
-}
-
 export function computeAuthMetaDigestV2(authMetaBytes, authDigestAlgId = AuthDigestAlgId.SHA3_256) {
   ensureAuthDigestAlgIdSupported(authDigestAlgId);
   assertBytesLimit(authMetaBytes, MAX_AUTH_METADATA_BYTES, 'authMetaBytes', ErrorCode.E_FORMAT_LENGTH);
@@ -511,41 +384,10 @@ function parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, expectedDi
   return metadata;
 }
 
-function parseCreatedAtValue(value) {
-  const iso = decodeUtf8(value);
-  try {
-    return normalizeCanonicalUtcIso8601(iso);
-  } catch (_err) {
-    throw createError(ErrorCode.E_FORMAT_TLV, { reason: 'createdAt_invalid_iso8601' });
-  }
-}
-
 function parseMetadata(records) {
   const metadata = {};
 
   for (const { tag, value } of records) {
-    if (tag === MetadataTag.FILENAME) {
-      if (value.length === 0) {
-        throw createError(ErrorCode.E_FORMAT_TLV, { tag, reason: 'filename_empty' });
-      }
-      metadata.filename = decodeUtf8(value);
-      continue;
-    }
-
-    if (tag === MetadataTag.FILESIZE) {
-      if (value.length !== 8) {
-        throw createError(ErrorCode.E_FORMAT_TLV, { tag, reason: 'filesize_len', len: value.length });
-      }
-      const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
-      metadata.filesize = readU64LE(view, 0);
-      continue;
-    }
-
-    if (tag === MetadataTag.CREATED_AT) {
-      metadata.createdAt = parseCreatedAtValue(value);
-      continue;
-    }
-
     if (tag === MetadataTag.SIGNER_PUBLIC_KEY) {
       metadata.signerPublicKey = Uint8Array.from(value);
       continue;
@@ -629,7 +471,6 @@ export function packSignatureV2({
   signature,
   ctx = QSIG_V2_CONTEXT,
   authenticatedMetadata = {},
-  displayMetadata = {},
   versionMajor = QSIG_FORMAT_VERSION_MAJOR,
   versionMinor = QSIG_FORMAT_VERSION_MINOR,
 }) {
@@ -681,24 +522,15 @@ export function packSignatureV2({
     throw createError(ErrorCode.E_FORMAT_TLV, { field: 'authMetaDigest', reason: 'mismatch_at_pack' });
   }
 
-  const displayMetaBytes = packDisplayMetadataV2(displayMetadata);
-  if (displayMetaBytes.length !== 0) {
-    throw createError(ErrorCode.E_FORMAT_TLV, {
-      field: 'displayMeta',
-      reason: 'unsigned_display_metadata_not_supported',
-    });
-  }
   assertMaxLength(authMetaBytes.length, MAX_AUTH_METADATA_BYTES, 'authMetaLen', ErrorCode.E_FORMAT_LENGTH);
-  assertMaxLength(displayMetaBytes.length, MAX_DISPLAY_METADATA_BYTES, 'displayMetaLen', ErrorCode.E_FORMAT_LENGTH);
   assertMaxLength(signature.length, MAX_SIGNATURE_BYTES, 'sigLen', ErrorCode.E_FORMAT_LENGTH);
   ensureU16(authMetaBytes.length, 'authMetaLen');
-  ensureU16(displayMetaBytes.length, 'displayMetaLen');
   ensureU32(signature.length, 'sigLen');
 
-  const flags = SigFlags.CTX_PRESENT;
+  const flags = SIG_FLAG_CTX_PRESENT;
 
   const headerLen = 4 + 1 + 1 + 1 + 1 + 1 + 1 + 2 + FILE_HASH_LENGTH + AUTH_META_DIGEST_LENGTH + 1 + 1 + 2 + 2 + 4;
-  const totalLen = headerLen + ctxBytes.length + authMetaBytes.length + displayMetaBytes.length + signature.length;
+  const totalLen = headerLen + ctxBytes.length + authMetaBytes.length + signature.length;
   assertMaxLength(totalLen, MAX_SIGNATURE_FILE_BYTES, 'sigBytes', ErrorCode.E_FORMAT_LENGTH);
   const out = new Uint8Array(totalLen);
   const view = new DataView(out.buffer);
@@ -722,7 +554,8 @@ export function packSignatureV2({
   out[o++] = 0;
   view.setUint16(o, authMetaBytes.length, true);
   o += 2;
-  view.setUint16(o, displayMetaBytes.length, true);
+  // Display metadata length: always zero. Unsigned labels are never emitted.
+  view.setUint16(o, 0, true);
   o += 2;
   view.setUint32(o, signature.length, true);
   o += 4;
@@ -730,8 +563,6 @@ export function packSignatureV2({
   o += ctxBytes.length;
   out.set(authMetaBytes, o);
   o += authMetaBytes.length;
-  out.set(displayMetaBytes, o);
-  o += displayMetaBytes.length;
   out.set(signature, o);
 
   return out;
@@ -777,7 +608,7 @@ export function unpackSignatureV2(sigBytes) {
   ensureAuthDigestAlgIdSupported(authDigestAlgId);
 
   const flags = reader.u16(ErrorCode.E_FORMAT_FLAGS);
-  if ((flags & ~KNOWN_SIG_FLAGS) !== 0) {
+  if ((flags & ~SIG_FLAG_CTX_PRESENT) !== 0) {
     throw createError(ErrorCode.E_FORMAT_FLAGS, { flags });
   }
 
@@ -800,9 +631,8 @@ export function unpackSignatureV2(sigBytes) {
   }
   const sigLen = reader.u32(ErrorCode.E_FORMAT_LENGTH);
   assertMaxLength(authMetaLen, MAX_AUTH_METADATA_BYTES, 'authMetaLen', ErrorCode.E_FORMAT_LENGTH);
-  assertMaxLength(displayMetaLen, MAX_DISPLAY_METADATA_BYTES, 'displayMetaLen', ErrorCode.E_FORMAT_LENGTH);
   assertMaxLength(sigLen, MAX_SIGNATURE_BYTES, 'sigLen', ErrorCode.E_FORMAT_LENGTH);
-  const expectedRemaining = ctxLen + authMetaLen + displayMetaLen + sigLen;
+  const expectedRemaining = ctxLen + authMetaLen + sigLen;
   if (reader.remaining() !== expectedRemaining) {
     throw createError(ErrorCode.E_FORMAT_LENGTH, {
       expectedRemaining,
@@ -824,20 +654,18 @@ export function unpackSignatureV2(sigBytes) {
     });
   }
   const authMetaBytes = reader.take(authMetaLen, ErrorCode.E_FORMAT_TLV);
-  const displayMetaBytes = reader.take(displayMetaLen, ErrorCode.E_FORMAT_TLV);
   const signature = reader.take(sigLen, ErrorCode.E_FORMAT_LENGTH);
 
-  const ctxFlag = (flags & SigFlags.CTX_PRESENT) !== 0;
+  const ctxFlag = (flags & SIG_FLAG_CTX_PRESENT) !== 0;
   if (!ctxFlag) {
     throw createError(ErrorCode.E_FORMAT_FLAGS, { field: 'ctx', flags, ctxLen });
   }
 
   const authenticatedMetadata = parseAuthenticatedMetadataV2(authMetaBytes, authDigestAlgId, authMetaDigest);
-  const displayMetadata = {};
   const wireLengths = getSuiteWireLengths(suiteId);
   ensureLength(authenticatedMetadata.signerPublicKey, wireLengths.publicKey, ErrorCode.E_FORMAT_LENGTH, 'signerPublicKey');
   ensureLength(signature, wireLengths.signature, ErrorCode.E_FORMAT_LENGTH, 'signature');
-  const metadata = { ...displayMetadata, ...authenticatedMetadata };
+  const metadata = authenticatedMetadata;
 
   const tbs = buildTBSV2({
     formatVerMajor: versionMajor,
@@ -865,7 +693,6 @@ export function unpackSignatureV2(sigBytes) {
     ctx,
     ctxBytes,
     authenticatedMetadata,
-    displayMetadata,
     metadata,
     signature,
     signatureLength: signature.length,
@@ -1049,48 +876,4 @@ function crc32(bytes) {
     crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
-}
-
-export function detectMagic(bytes) {
-  if (!(bytes instanceof Uint8Array) || bytes.length < 4) return 'UNKNOWN';
-  const m = bytes.subarray(0, 4);
-  if (equalsBytes(m, MAGIC_SIG)) return 'SIG';
-  if (equalsBytes(m, MAGIC_PQPK)) return 'PQPK';
-  if (equalsBytes(m, MAGIC_PQSK)) return 'PQSK';
-  return 'UNKNOWN';
-}
-
-export function metadataToPlain(metadata) {
-  const signerFingerprint = metadata.signerFingerprint ? unpackSignerFingerprint(metadata.signerFingerprint) : null;
-  let filesize;
-  if (metadata.filesize !== undefined) {
-    if (typeof metadata.filesize === 'number') {
-      if (!Number.isSafeInteger(metadata.filesize) || metadata.filesize < 0) {
-        throw createError(ErrorCode.E_FORMAT_LENGTH, {
-          field: 'filesize',
-          reason: 'unsafe_integer',
-          value: String(metadata.filesize),
-        });
-      }
-      filesize = metadata.filesize;
-    } else {
-      const normalizedFilesize = ensureU64(metadata.filesize, 'filesize');
-      if (normalizedFilesize > BigInt(Number.MAX_SAFE_INTEGER)) {
-        throw createError(ErrorCode.E_FORMAT_LENGTH, {
-          field: 'filesize',
-          reason: 'unsafe_integer',
-          value: normalizedFilesize.toString(),
-        });
-      }
-      filesize = Number(normalizedFilesize);
-    }
-  }
-  return {
-    filename: metadata.filename,
-    filesize,
-    createdAt: metadata.createdAt,
-    signerFingerprintAlg: signerFingerprint ? getFingerprintName(signerFingerprint.algId) : undefined,
-    signerFingerprintHex: signerFingerprint ? bytesToHexLower(signerFingerprint.digest) : undefined,
-    signerPublicKeyLength: metadata.signerPublicKey ? metadata.signerPublicKey.length : undefined,
-  };
 }

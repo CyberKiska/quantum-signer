@@ -6,6 +6,8 @@ import { HashAlgId, getHashName, unpackSignatureV2 } from './formats/containers.
 import { bytesToHexLower } from './formats/encoding.js';
 import { validateRequired } from './crypto/validate.js';
 import { runVerificationSelfTest } from './crypto/verification-selftest.js';
+import { verifyBytes } from './crypto/browser-verification.js';
+import { sha3_512 } from '@noble/hashes/sha3.js';
 import { wipeBytes } from './crypto/bytes.js';
 import { utf8ToBytesStrict } from './crypto/text-encoding.js';
 import { finalizePayloadVerification } from './crypto/verify-policy.js';
@@ -17,7 +19,8 @@ const Handlers = Object.freeze({ HASH_FILE: handleHashFile, HASH_TEXT: handleHas
   VERIFY_FILE: handleVerifyFile, VERIFY_TEXT: handleVerifyText, SELFTEST: handleSelfTest });
 // Startup KATs use only public NIST fixtures. A failure latches this worker closed.
 let healthy = false;
-try { healthy = runVerificationSelfTest().ok; } catch { healthy = false; }
+const runKats = () => runVerificationSelfTest({ verifyBytes, sha3_512 });
+try { healthy = runKats().ok; } catch { healthy = false; }
 let busy = false;
 self.onmessage = async (event) => {
   const request = event.data;
@@ -144,7 +147,7 @@ async function handleVerifyText(_id, payload) {
 
 function handleSelfTest() {
   try {
-    const report = runVerificationSelfTest();
+    const report = runKats();
     healthy = healthy && report.ok;
     return { ...report, ok: healthy };
   } catch (error) { healthy = false; throw error; }

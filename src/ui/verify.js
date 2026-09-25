@@ -5,7 +5,6 @@ import { HashAlgId, getHashName, getSuiteName, unpackSignatureV2 } from '../form
 import { createOperationGate } from '../core/operation-gate.js';
 import {
   byId,
-  buildLegacyDisplayMetadataReviewGroup,
   formatBytes,
   readFileAsBytes,
   resetProgress,
@@ -29,6 +28,20 @@ const PREVIEW_TIMEOUT_MS = Object.freeze({
 });
 
 const TEXT_PREVIEW_DEBOUNCE_MS = 180;
+
+// Invisible, bidirectional and separator code points make the bytes verified
+// in Plain Text mode differ from what the reader sees (Unicode UTS #39 /
+// "Trojan Source" class). Their presence is surfaced before verification.
+const DECEPTIVE_TEXT_CODE_POINT =
+  /[\u00ad\u061c\u115f\u1160\u180e\u200b-\u200f\u202a-\u202e\u2028\u2029\u2060-\u2064\u2066-\u2069\u3164\ufeff\ufff9-\ufffb]/gu;
+
+export function describeDeceptiveText(text) {
+  const matches = String(text).match(DECEPTIVE_TEXT_CODE_POINT) ?? [];
+  if (matches.length === 0) return null;
+  const distinct = [...new Set(matches)].slice(0, 8)
+    .map((char) => `U+${char.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
+  return `${matches.length} invisible or bidirectional control character(s): ${distinct.join(', ')}. What you see may not be what is verified.`;
+}
 
 function isSlowSuite(suiteId) {
   return getSuiteName(suiteId).startsWith('SLH-DSA');
@@ -91,7 +104,8 @@ function describeVerifiedKeySource(result) {
 
 function renderVerifyResult(result) {
   const lines = [];
-  lines.push(`Valid: ${result.valid ? 'YES' : 'NO'}`);
+  lines.push(`Valid (intact and signer key selected): ${result.valid ? 'YES' : 'NO'}`);
+  lines.push(`Integrity (signature and payload intact): ${result.integrityValid ? 'YES' : 'NO'}`);
   lines.push(`Cryptographic verification: ${result.cryptoValid ? 'YES' : 'NO'}`);
   if (result.signatureEvaluated) {
     lines.push(`Container signature policy: ${result.signaturePolicyValid ? 'PASS' : 'FAIL'}`);
@@ -99,7 +113,7 @@ function renderVerifyResult(result) {
   if (typeof result.payloadMatches === 'boolean') {
     lines.push(`Payload digest match: ${result.payloadMatches ? 'YES' : 'NO'}`);
   }
-  lines.push(`Externally supplied verification key accepted: ${result.trusted ? 'YES' : 'NO'}`);
+  lines.push(`Signer verified with selected public key: ${result.trusted ? 'YES' : 'NO'}`);
   lines.push(`Trust source: ${describeTrustSource(result)}`);
   lines.push(`Verified key source: ${describeVerifiedKeySource(result)}`);
   lines.push(`Input type: ${result.inputKind}`);
@@ -187,9 +201,6 @@ export function setupVerifyTab(state, workerClient) {
     signatureLength: null,
     payloadDigestHex: null,
     embeddedFingerprintHex: null,
-    displayFilename: null,
-    displayFilesize: null,
-    displayCreatedAt: null,
     signatureFilename: null,
     loadedKeyMatches: null,
   };
@@ -281,9 +292,14 @@ export function setupVerifyTab(state, workerClient) {
       inputDigest = `Unavailable (${inputPreview.error})`;
     }
 
+    const deceptiveText = mode === 'text' ? describeDeceptiveText(text) : null;
     const reviewedInputGroup = {
       title: 'Reviewed local inputs',
+      note: mode === 'text'
+        ? 'Plain Text is verified as UTF-8 exactly as the browser submits it; browsers convert CRLF line endings to LF. Use File mode for existing files.'
+        : undefined,
       rows: [
+        ...(deceptiveText ? [{ label: 'Text warning', value: deceptiveText, tone: 'warning' }] : []),
         {
           label: 'Original input',
           value: describeVerifyInput(mode, file, text, inputPreview.inputLength),
@@ -359,24 +375,11 @@ export function setupVerifyTab(state, workerClient) {
       }
     }
 
-    const legacyDisplayGroup =
-      signaturePreview.status === 'ready'
-        ? buildLegacyDisplayMetadataReviewGroup(
-            {
-              filename: signaturePreview.displayFilename,
-              filesize: signaturePreview.displayFilesize,
-              createdAt: signaturePreview.displayCreatedAt,
-            },
-            inputPreview.status === 'ready' ? inputPreview.inputLength : null
-          )
-        : null;
-
     renderReviewGroups(
       reviewEl,
       [
         reviewedInputGroup,
         containerGroup,
-        legacyDisplayGroup,
         {
           title: 'External trust input',
           note: 'A matching key loaded independently is required for signer identity assurance.',
@@ -523,9 +526,6 @@ export function setupVerifyTab(state, workerClient) {
         signatureLength: null,
         payloadDigestHex: null,
         embeddedFingerprintHex: null,
-        displayFilename: null,
-        displayFilesize: null,
-        displayCreatedAt: null,
         signatureFilename: null,
         loadedKeyMatches: null,
       });
@@ -544,9 +544,6 @@ export function setupVerifyTab(state, workerClient) {
       signatureLength: null,
       payloadDigestHex: null,
       embeddedFingerprintHex: null,
-      displayFilename: null,
-      displayFilesize: null,
-      displayCreatedAt: null,
       signatureFilename: sigFile.name,
       loadedKeyMatches: null,
     });
@@ -572,10 +569,6 @@ export function setupVerifyTab(state, workerClient) {
         signatureLength: parsedSig.signatureLength,
         payloadDigestHex: bytesToHexLower(parsedSig.payloadDigest),
         embeddedFingerprintHex,
-        displayFilename: parsedSig.displayMetadata?.filename || null,
-        displayFilesize:
-          typeof parsedSig.displayMetadata?.filesize === 'bigint' ? parsedSig.displayMetadata.filesize.toString() : null,
-        displayCreatedAt: parsedSig.displayMetadata?.createdAt || null,
         signatureFilename: sigFile.name,
         loadedKeyMatches: deriveLoadedKeyMatches(embeddedFingerprintHex),
       });
@@ -593,9 +586,6 @@ export function setupVerifyTab(state, workerClient) {
         signatureLength: null,
         payloadDigestHex: null,
         embeddedFingerprintHex: null,
-        displayFilename: null,
-        displayFilesize: null,
-        displayCreatedAt: null,
         signatureFilename: sigFile.name,
         loadedKeyMatches: null,
       });
@@ -637,23 +627,25 @@ export function setupVerifyTab(state, workerClient) {
     }
 
     if (result.valid) {
-      if (!result.trusted) {
-        setResultTone('warning', 'UNTRUSTED');
-        resultIcon.textContent = '⚠️';
-        resultHeading.textContent = 'Signature Valid — Untrusted Signer';
-        resultMessage.textContent =
-          'The payload is internally consistent with the public key embedded in .qsig, but no external trusted key was supplied.';
-        showToast('warning', 'Signature is valid only with its embedded, untrusted key');
-        return;
-      }
       setResultTone('valid', 'VALID');
       resultIcon.textContent = '✅';
       resultHeading.textContent = 'Signature Valid';
       resultMessage.textContent =
         result.inputKind === 'text'
-          ? 'The signature is valid and matches the provided plain text.'
-          : 'The signature is valid and matches the selected file.';
+          ? 'The signature is valid for the selected public key and matches the provided plain text.'
+          : 'The signature is valid for the selected public key and matches the selected file.';
       showToast('success', 'Verification successful');
+      return;
+    }
+
+    if (result.integrityValid) {
+      // Fail-safe: an embedded key proves only internal consistency, never the signer.
+      setResultTone('warning', 'UNTRUSTED');
+      resultIcon.textContent = '⚠️';
+      resultHeading.textContent = 'Signer Not Verified — Integrity Only';
+      resultMessage.textContent =
+        'The payload matches a signature made with the public key embedded in .qsig. Anyone can create such a signature. Select the signer\'s public key (.pqpk) from a trusted source to verify who signed.';
+      showToast('warning', 'Signer not verified: no trusted public key selected');
       return;
     }
 

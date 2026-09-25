@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, createPrivateKey } from 'node:crypto';
 import { build } from 'esbuild';
 import { listSuites } from '../src/crypto/suite-metadata.js';
-import { generateKeypair, signBytes, verifyBytes as verifyJS } from '../src/crypto/algorithms.js';
+import { generateKeypair, signBytes, verifyBytes as verifyJS } from './lib/reference-pq.mjs';
 import { generateNativeKey, importPkcs8, importLegacySecretKey, publicKeyBytes, checkPrivateKey, signBytesNative, verifyBytes } from '../src/native/crypto.js';
 import { createDetachedSignature } from '../src/native/signing.js';
 import { encryptSecretKeyFile, decryptSecretKeyFile } from '../src/crypto/key-protection.js';
@@ -78,11 +78,16 @@ try {
   const saved = await readFile(path.join(directory, 'key.pqse'));
   run(['keygen', '--secret', 'key.pqse', '--public', 'key.pqpk', '--passphrase-fd', '0'], 1);
   assert.deepEqual(await readFile(path.join(directory, 'key.pqse')), saved);
+  assert.equal(saved[4], 3, 'keygen must emit PQSE 3 (Argon2id)');
+  // A public-path collision must not leave a new, orphaned private key.
+  run(['keygen', '--secret', 'orphan.pqse', '--public', 'key.pqpk', '--passphrase-fd', '0'], 1);
+  await assert.rejects(stat(path.join(directory, 'orphan.pqse')));
   const digest = run(['hash', '--file', 'payload']).trim();
   run(['sign', '--secret', 'key.pqse', '--file', 'payload', '--out', 'payload.qsig', '--expect-sha3-512', '00'.repeat(64), '--passphrase-fd', '0'], 1);
   run(['sign', '--secret', 'key.pqse', '--file', 'payload', '--out', 'payload.qsig', '--expect-sha3-512', digest, '--passphrase-fd', '0']);
   run(['verify', '--file', 'payload', '--signature', 'payload.qsig', '--public', 'key.pqpk']);
-  run(['verify', '--file', 'payload', '--signature', 'payload.qsig'], 2);
+  const embeddedOnly = JSON.parse(run(['verify', '--file', 'payload', '--signature', 'payload.qsig'], 2));
+  assert(!embeddedOnly.valid && embeddedOnly.integrityValid && !embeddedOnly.trusted && embeddedOnly.code === 'E_SIGNER_UNTRUSTED');
   run(['public', '--secret', 'key.pqse', '--out', 'recovered.pqpk', '--passphrase-fd', '0']);
   assert.deepEqual(await readFile(path.join(directory, 'key.pqpk')), await readFile(path.join(directory, 'recovered.pqpk')));
   await writeFile(path.join(directory, 'payload'), 'tampered');
@@ -98,6 +103,24 @@ try {
     run(['public', '--secret', 'legacy.pqsk', '--out', 'legacy-raw.pqpk']);
     run(['public', '--secret', 'legacy.pqse', '--out', 'legacy-protected.pqpk', '--passphrase-fd', '0']);
     assert.deepEqual(await readFile(path.join(directory, 'legacy-raw.pqpk')), await readFile(path.join(directory, 'legacy-protected.pqpk')));
+    // Migration: legacy keys warn, and rewrap re-encrypts them as PQSE 3 (Argon2id).
+    const legacyRun = spawnSync(process.execPath, [path.resolve('src/native/cli.mjs'), 'public', '--secret', 'legacy.pqsk', '--out', 'legacy-warn.pqpk'],
+      { cwd: directory, encoding: 'utf8', timeout: 120000 });
+    assert.equal(legacyRun.status, 0);
+    assert.match(legacyRun.stderr, /legacy UNENCRYPTED PQSK private key.*rewrap/u);
+    const newPassword = 'rewrapped key password for tests';
+    const rewrap = spawnSync(process.execPath, [path.resolve('src/native/cli.mjs'), 'rewrap', '--secret', 'legacy.pqse', '--out', 'rewrapped.pqse', '--passphrase-fd', '0'],
+      { cwd: directory, input: `${password}\n${newPassword}\n`, encoding: 'utf8', timeout: 120000 });
+    assert.equal(rewrap.status, 0, rewrap.stderr);
+    assert.match(rewrap.stderr, /legacy PBKDF2-protected PQSE 1/u);
+    const rewrapped = await readFile(path.join(directory, 'rewrapped.pqse'));
+    assert.equal(rewrapped[4], 3, 'rewrap must emit PQSE 3');
+    if (process.platform !== 'win32') assert.equal((await stat(path.join(directory, 'rewrapped.pqse'))).mode & 0o777, 0o600);
+    const recovered = spawnSync(process.execPath, [path.resolve('src/native/cli.mjs'), 'public', '--secret', 'rewrapped.pqse', '--out', 'rewrapped.pqpk', '--passphrase-fd', '0'],
+      { cwd: directory, input: `${newPassword}\n`, encoding: 'utf8', timeout: 120000 });
+    assert.equal(recovered.status, 0, recovered.stderr);
+    assert.doesNotMatch(recovered.stderr, /legacy/u);
+    assert.deepEqual(await readFile(path.join(directory, 'rewrapped.pqpk')), await readFile(path.join(directory, 'legacy-protected.pqpk')));
     pqsk.fill(0);
   } finally { legacy.secretKey.fill(0); }
 } finally { await rm(directory, { recursive: true, force: true }); }

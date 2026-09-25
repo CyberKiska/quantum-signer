@@ -1,0 +1,63 @@
+{
+  "schema": "quantum-signer-native-kat/v1",
+  "note": "Public NIST ACVP test data only. No user key material.",
+  "source": {
+    "repository": "https://github.com/usnistgov/ACVP-Server",
+    "commit": "a7f283cdc87d2d6dd93c1bac59e5622c5f9f8324",
+    "mlDsaKeyGen": {
+      "path": "gen-val/json-files/ML-DSA-keyGen-FIPS204/internalProjection.json",
+      "sha256": "e67ee6540d40e11506c3c4e3b1f79fc1cefcd49820db99fc61f87cc8ba463baf"
+    },
+    "slhDsaSigGen": {
+      "repository": "https://github.com/usnistgov/ACVP-Server",
+      "commit": "a7f283cdc87d2d6dd93c1bac59e5622c5f9f8324",
+      "promptPath": "gen-val/json-files/SLH-DSA-sigGen-FIPS205/prompt.json",
+      "promptSha256": "afa673eacdf0aec53512a159159b7632684adfcd0d88f8640a7f6f5796aacdc8",
+      "expectedResultsPath": "gen-val/json-files/SLH-DSA-sigGen-FIPS205/expectedResults.json",
+      "expectedResultsSha256": "71e8e0f7e4b0cfd1747314299204d9d4d50968d200a4ae873921eaa7aabeaad1"
+    }
+  },
+  "mlDsaKeyGen": [
+    {
+      "suiteId": 1,
+      "tgId": 1,
+      "tcId": 1,
+      "seedHex": "7194b13c95231010afd2c909992bd2003ba6f437c3886bdbe3f6b867a14ba161",
+      "publicKeySha256": "838b88b6ac41e2c60698173e08ca173d0b0d2839205806e56a8a3d53195f3a03"
+    },
+    {
+      "suiteId": 2,
+      "tgId": 2,
+      "tcId": 26,
+      "seedHex": "a991fd42b071d49c48ae3e75c647459e0daad1e1ba356a04801912d3294bcff8",
+      "publicKeySha256": "b1a7d0d2f0d7a04b9d5ffccd9bd578864dab4a01cdd7f70a05cd1f4f0672e43a"
+    },
+    {
+      "suiteId": 3,
+      "tgId": 3,
+      "tcId": 51,
+      "seedHex": "a16f5b0796703e2d1a0140a35cbf36efabe70e752ba59b6a9a0e9c4b05302f73",
+      "publicKeySha256": "33f49649f05ec2fc3b050007b18ade043bbc8d1c0ded03a269d540486daaa5f4"
+    }
+  ],
+  "slhDsaSecretKeys": [
+    {
+      "suiteId": 17,
+      "tgId": 25,
+      "tcId": 214,
+      "secretKeyHex": "8be78ef32c6eeb19e88ea1abfd1a518c1c3b7f755cebb3bffbfc95b45d6a46852d28f61b5f890e74b86f7b18dc8fc59b7ea6f3763850c2025bccac79dd6f3457"
+    },
+    {
+      "suiteId": 18,
+      "tgId": 27,
+      "tcId": 233,
+      "secretKeyHex": "00e2bf64fe7d60f19943dc26211f917b94b735e7703a9f2af6ef3405214a5deb7e6c302ffb9b42fbffbd6a73311fbfc2c1694840e4251fd41020851628ad3abc6beb05a5f03a1899a71467f4574dc29c9f0553d1e9206cfc381c94ae08215118"
+    },
+    {
+      "suiteId": 19,
+      "tgId": 29,
+      "tcId": 252,
+      "secretKeyHex": "94fb1073937f3b4058d3746f46bb1a2bb488371edbf0348aa50b975ec88314477a31771823882a40d332a1645f342a3bde77df01f889c9b7708df46eb3e61ddd3f576a6c447212eb3c2f9cdb4858a1c46157daeaa58e4b8c3646d45000fe5c383d7f7ad7c0e7a1a25bfc7930794d75ca165c4228f128bd6b916989144243cef8"
+    }
+  ]
+}

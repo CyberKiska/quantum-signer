@@ -24,6 +24,7 @@ for (const name of ['hashes', 'post-quantum']) {
 }
 await writeFile(path.join(output, 'THIRD-PARTY.txt'), notices.join('\n\n'));
 await cp(path.join(root, 'spec/qsig-v2.txt'), path.join(output, 'qsig-v2.txt'));
+await cp(path.join(root, 'spec/qsig-v2-vector.json'), path.join(output, 'qsig-v2-vector.json'));
 await cp(path.join(root, 'docs/RELEASE.md'), path.join(output, 'RELEASE.md'));
 // esbuild's legal-comment sidecar (if any) is part of the authenticated inventory.
 for (const file of native.outputFiles.slice(1)) await writeFile(path.join(output, path.basename(file.path)), file.contents);

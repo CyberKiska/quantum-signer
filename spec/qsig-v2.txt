@@ -1,4 +1,4 @@
-Quantum Signer wire profile: QSIG 2.0, PQPK/PQSK 1.1, PQSE 1.0/2.0
+Quantum Signer wire profile: QSIG 2.0, PQPK/PQSK 1.1, PQSE 3.0 (1.0/2.0 read-only)
 
 This is an application-specific binary protocol. MUST and MUST NOT describe this
 profile, not additional requirements imposed by NIST. It is not CMS, JOSE, COSE,
@@ -20,6 +20,10 @@ The original payload is the exact file byte sequence, or strict UTF-8 of text.
 Text MUST reject unpaired UTF-16 surrogates. No Unicode normalization, newline
 conversion, BOM insertion/removal or whitespace trimming occurs for payloads.
 Empty payloads are allowed. Text does not bind a media type.
+These rules apply to bytes/string values received by the encoder. Browser text
+controls can normalize CRLF to LF before encoding; use File mode to preserve
+the original bytes of an existing text file. The browser UI requires nonempty
+Plain Text even though the worker/format permit empty payloads.
 
 payloadDigest = SHA3-512(payload), 64 bytes (FIPS 202, not Keccak-512).
 fingerprint   = 01 || SHA3-256(rawPublicKey), 33 bytes.
@@ -29,10 +33,10 @@ authDigest    = SHA3-256(authMetadata), 32 bytes.
 TBS           = ASCII("QSTB") || 02 00 || 02 00 || suiteId || 01 || 01 || 01 ||
                 payloadDigest || authDigest.
 TBS is exactly 108 bytes. The two version pairs are TBS and QSIG versions.
-Context is exactly UTF-8("quantum-signer/v2"), 16 bytes.
+Context is exactly UTF-8("quantum-signer/v2"), 17 bytes.
 
 Sign and verify TBS through the pure ML-DSA or SLH-DSA external API with that
-context. The primitive's encoded message is 00 || 10 || context || TBS, 126 bytes.
+context. The primitive's encoded message is 00 || 11 || context || TBS, 127 bytes.
 The application MUST NOT add this prefix itself when using a context-aware API.
 No prehash OID is prepended. OpenSSL API algorithm is null; context is supplied
 as bytes. Native signing uses the provider's default randomized signing mode;
@@ -49,15 +53,18 @@ Offset  Width  Value
 10      2      01 00 (context-present flag; no other bits accepted)
 12      64     payloadDigest
 76      32     authDigest
-108     1      10 (context length)
+108     1      11 (context length: 17 bytes)
 109     1      00 (reserved)
 110     2      authenticated metadata length
 112     2      00 00 (display metadata length)
 114     4      raw signature length from suite table
-118     16     context
-134     varies authenticated metadata
+118     17     context
+135     varies authenticated metadata
 next    varies raw signature
 No trailing bytes are permitted. There is no embedded original payload.
+Conformance vector: qsig-v2-vector.json (spec/ in source, release root in
+packages) gives seed, public key, payload, metadata, TBS and a complete QSIG in
+hex. Everything except the randomized signature is reproducible from the seed.
 
 Metadata records use u8 tag, u16LE length, value. Tags MUST be unique, strictly
 ascending, nonempty and exactly 10 and 11. Both are required. Unknown tags,
@@ -71,10 +78,14 @@ Parse strictly, reconstruct TBS, verify with the chosen public key and context,
 and compare the exact payload digest. Signature validity is distinct from payload
 matching and trust. An independently selected PQPK key MUST have the same suite
 and full raw public key as the embedded key; disagreement fails final policy even
-if one signature check succeeds. Embedded-key-only validity MUST NOT imply a
-trusted signer. Trust here means matching a user-selected key, not proving its
-owner's identity. Diagnostics MUST NOT supply or override validity/trust fields.
-The CLI exits 0 for trusted validity, 2 for embedded-only validity, 1 for failure.
+if one signature check succeeds. Trust here means matching a user-selected key,
+not proving its owner's identity. Diagnostics MUST NOT supply or override
+validity/trust fields.
+Results are fail-safe: valid = signature policy passes AND payload matches AND a
+selected key was used. A result that verifies only with the key embedded in the
+container (which anyone can mint) MUST report valid=false, integrityValid=true,
+trusted=false and code E_SIGNER_UNTRUSTED. Consumers MUST accept only valid=true.
+The CLI exits 0 for valid, 2 for integrity-only, 1 for failure.
 
 PQPK/PQSK legacy key container
 Offset  Width  Value
@@ -90,7 +101,31 @@ CRC detects damage only; it is not authentication or encryption. Length/version,
 flags, suite, CRC and absence of trailing bytes are mandatory checks.
 New supported private keys are not exported in plaintext PQSK format.
 
-PQSE protected private keys (new extension .pqse)
+PQSE protected private keys (extension .pqse)
+PQSE 3 (written by keygen and rewrap): Argon2id (RFC 9106) and AES-256-GCM.
+Offset  Width  Value
+0       4      ASCII PQSE
+4       2      03 00 (PKCS#8 DER plaintext)
+6       1      suiteId, authenticated and checked against the decrypted key
+7       1      02 Argon2id, version 0x13
+8       1      01 AES-256-GCM
+9       1      00 flags
+10      4      Argon2id memory in KiB, default 262144; accepted 65536..2097152
+14      4      Argon2id passes, default 3; accepted 1..10
+18      1      Argon2id parallelism, default 4; accepted 1..16
+19      1      10 (16-byte salt)
+20      1      0c (12-byte IV)
+21      1      00 reserved
+22      4      ciphertext length including the 16-byte GCM tag
+26      16     random salt
+42      12     random IV
+54      varies ciphertext || 16-byte GCM tag
+AAD is the exact first 54 bytes. Argon2id(message = password, nonce = salt,
+tagLength 32, no secret, no associated data) is the AES-256 key. Cost bounds are
+checked before derivation so a hostile file cannot demand unbounded memory. An
+RFC 9106 section 5.3 Argon2id KAT runs before the first derivation.
+
+PQSE 1/2 (read-only legacy; rewrap migrates them to PQSE 3):
 Offset  Width  Value
 0       4      ASCII PQSE
 4       2      01 00 (PQSK plaintext) or 02 00 (PKCS#8 DER plaintext)
@@ -98,7 +133,7 @@ Offset  Width  Value
 7       1      01 PBKDF2-HMAC-SHA-512
 8       1      01 AES-256-GCM
 9       1      00 flags
-10      4      PBKDF2 iterations, default 600000; accepted 100000..5000000
+10      4      PBKDF2 iterations; accepted 100000..5000000
 14      1      10 (16-byte salt)
 15      1      0c (12-byte IV)
 16      2      00 00 reserved
@@ -106,13 +141,18 @@ Offset  Width  Value
 22      16     random salt
 38      12     random IV
 50      varies ciphertext || 16-byte GCM tag
-AAD is the exact first 50 bytes. Salt and IV are independent CSPRNG requests.
-PBKDF2 derives a 32-byte AES key. Passwords are strict UTF-8 without normalization,
-maximum 1024 encoded bytes, minimum 12 code points for new encryption. An FD input
-may end in LF or CRLF, which terminates the password line and is not password data.
-Creation snapshots plaintext before awaits; opening snapshots the whole envelope.
-All header, algorithm, version, size, tag and suite mismatches MUST fail closed.
-PQSE 2 is a new key-file version, not a change to the QSIG signature protocol.
+AAD is the exact first 50 bytes. PBKDF2 derives a 32-byte AES key.
+
+All versions: salt and IV are independent CSPRNG requests; a fresh salt yields a
+fresh key per file, so the random 96-bit IV is never reused under one key
+(SP 800-38D section 8.2). Passwords are strict UTF-8 without normalization,
+maximum 1024 encoded bytes, minimum 15 code points for new encryption
+(SP 800-63B-4). An FD input may end in LF or CRLF, which terminates the password
+line and is not password data. Creation snapshots plaintext before awaits;
+opening snapshots the whole envelope. All header, algorithm, version, size, cost,
+tag and suite mismatches MUST fail closed. PQSE versions are key-file versions,
+not changes to the QSIG signature protocol. The CLI warns when it loads PQSE 1/2
+or plaintext PQSK keys.
 PKCS#8 keys are decoded by Node/OpenSSL; ML-DSA seed-only export is supported.
 Legacy expanded ML-DSA imports use RFC 9881's expandedKey OCTET STRING wrapped in
 PKCS#8, with absent AlgorithmIdentifier parameters. SLH-DSA imports use raw-private
@@ -122,7 +162,7 @@ test. Every emitted QSIG passes primitive and parsed-container self-verification
 Resource limits (also enforced before expensive operations where possible)
 Payload 1 GiB; text 8 MiB UTF-8; key file 32 KiB; signature file 128 KiB;
 authenticated metadata 8 KiB; raw signature 64 KiB; context maximum 255 bytes at
-the primitive adapter, fixed 16 bytes in QSIG. Browser verification serializes
+the primitive adapter, fixed 17 bytes in QSIG. Browser verification serializes
 worker requests and rejects concurrent requests while one is active.
 
 Implementation boundaries and normative references
@@ -132,7 +172,8 @@ FIPS 202 (SHA-3): https://csrc.nist.gov/pubs/fips/202/final
 SP 800-185 (KMAC/cSHAKE): not instantiated by this profile.
 SP 800-90A/B/C: provider entropy/DRBG assurance; application output length does
 not establish min-entropy or an approved entropy-source validation.
-SP 800-132, RFC 8018: password-based derivation and PKCS#8 storage composition.
+RFC 9106: Argon2id for PQSE 3. SP 800-132, RFC 8018: PBKDF2 for legacy PQSE 1/2.
+SP 800-63B-4: minimum password length guidance.
 SP 800-38D, FIPS 197: AES-GCM and AES; FIPS 180-4: SHA-512 within PBKDF2/HMAC.
 RFC 2104 / FIPS 198-1: HMAC; RFC 3629: UTF-8; RFC 4648: canonical base encodings.
 RFC 5958 and ITU-T X.690: private-key structure / DER.
@@ -143,11 +184,16 @@ FIPS 140-3 / ISO/IEC 19790 and 24759: module validation requires separate eviden
 https://nodejs.org/api/crypto.html documents the native integration API.
 
 Only the local CLI performs supported private operations, using Node/OpenSSL
-KeyObjects. The browser exposes verification and hashing only. Browser SHA-3 and
+KeyObjects. It requires OpenSSL 3.5.0 or newer and, before the first use of each
+suite in a process, runs NIST ACVP-derived self-tests: SHA3-256/512 KATs, pure
+verification KAT with wrong-context/message/signature rejections, ML-DSA KeyGen
+from an ACVP seed, and before private operations a signature from the ACVP key
+checked against the ACVP public key. Any failure stops all native operations. The browser exposes verification and hashing only. Browser SHA-3 and
 PQ verification use pinned JavaScript dependencies because the required complete
 suite set is not uniformly available through Web Crypto. Browser workers do not
 import private sessions, private-key protection or the reference signing adapter.
-Reference JavaScript signing/session modules exist solely for regression testing.
+The JavaScript reference signer used for cross-implementation tests lives in
+scripts/lib and is excluded from all shipped bundles by the build.
 Native KeyObjects reduce JS exposure of expanded secrets but do not provide a
 hardware boundary or guaranteed erasure of passwords, transient exports, runtime
 copies or OS memory. Native provider use is not evidence of FIPS validation.

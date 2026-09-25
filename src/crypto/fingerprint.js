@@ -13,13 +13,6 @@ export function computeFingerprintBytes(bytes) {
   return sha3_256(bytes);
 }
 
-export function computeFingerprint(bytes, size = 16) {
-  validateFingerprintInput(bytes);
-  const digest = computeFingerprintBytes(bytes);
-  const take = Math.max(1, Math.min(size, digest.length));
-  return bytesToHexLower(digest.subarray(0, take));
-}
-
 export function computeFingerprintHex(bytes) {
   return bytesToHexLower(computeFingerprintBytes(bytes));
 }

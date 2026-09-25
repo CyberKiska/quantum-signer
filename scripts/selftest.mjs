@@ -1,4 +1,4 @@
-import { runSelfTest } from '../src/crypto/selftest.js';
+import { runSelfTest } from './lib/protocol-cases.mjs';
 
 async function main() {
   const full = process.env.FULL_SELFTEST === '1';

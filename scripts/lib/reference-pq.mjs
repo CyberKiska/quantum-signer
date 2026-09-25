@@ -1,39 +1,40 @@
-// Regression/reference implementation only. Supported private operations use src/native/crypto.js.
+// Test-only JavaScript reference (noble) for cross-implementation checks.
+// Never imported by src/; supported private operations use src/native/crypto.js.
 import { ml_dsa44, ml_dsa65, ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import {
   slh_dsa_shake_128s,
   slh_dsa_shake_192s,
   slh_dsa_shake_256s,
 } from '@noble/post-quantum/slh-dsa.js';
-import { ErrorCode, createError } from './errors.js';
-import { wipeBytes } from './bytes.js';
+import { ErrorCode, createError } from '../../src/crypto/errors.js';
+import { wipeBytes } from '../../src/crypto/bytes.js';
 import {
   DEFAULT_HASH_CHUNK_SIZE,
   MAX_CONTEXT_BYTES,
   MAX_PAYLOAD_FILE_BYTES,
   assertFileSizeLimit,
   normalizeChunkSize,
-} from './policy.js';
+} from '../../src/crypto/policy.js';
 import {
   HashAlgId,
   QSIG_V2_CONTEXT,
   SignatureProfileId,
   buildSignedMessageV2,
-} from '../formats/containers.js';
+} from '../../src/formats/containers.js';
 import {
   assertCondition,
   validateBytes,
   validateHashAlgId,
   validateSuiteId,
-} from './validate.js';
-import { bytesToHexLower, hexToBytesStrict } from '../formats/encoding.js';
+} from '../../src/crypto/validate.js';
+import { bytesToHexLower, hexToBytesStrict } from '../../src/formats/encoding.js';
 import {
   DEFAULT_SLH_SUITE_ID,
   DEFAULT_SUITE_ID,
   SuiteId,
   assertKeyLength as assertMetadataKeyLength,
   getSuiteWireLengths,
-} from './suite-metadata.js';
+} from '../../src/crypto/suite-metadata.js';
 
 export { DEFAULT_SLH_SUITE_ID, DEFAULT_SUITE_ID };
 export const DEFAULT_HASH_ALG_ID = HashAlgId.SHA3_512;
@@ -320,4 +321,4 @@ export function ensureHashAlg(hashAlgId) {
   validateHashAlgId(hashAlgId);
 }
 
-export { hashFileSHA3512, hashBytesSHA3512 } from './browser-hashing.js';
+export { hashFileSHA3512, hashBytesSHA3512 } from '../../src/crypto/browser-hashing.js';

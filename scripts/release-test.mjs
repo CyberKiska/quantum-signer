@@ -24,7 +24,7 @@ const sandbox = await mkdtemp(path.join(tmpdir(), 'qsig-release-'));
 const executable = path.resolve('release/quantum-signer.mjs');
 const options = { cwd: sandbox, input: 'release smoke test password only\n' };
 try {
-  await writeFile(path.join(sandbox, 'payload'), 'release 2.0.1 smoke test');
+  await writeFile(path.join(sandbox, 'payload'), 'release smoke test payload');
   run(executable, ['keygen', '--suite', 'ML-DSA-44', '--secret', 'key.pqse', '--public', 'key.pqpk', '--passphrase-fd', '0'], 0, options);
   const digest = run(executable, ['hash', '--file', 'payload'], 0, options).trim();
   run(executable, ['sign', '--secret', 'key.pqse', '--file', 'payload', '--expect-sha3-512', digest, '--out', 'payload.qsig', '--passphrase-fd', '0'], 0, options);

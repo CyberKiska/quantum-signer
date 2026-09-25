@@ -30,6 +30,8 @@ for (const directive of [
   "base-uri 'none'",
   "script-src 'self'",
   "worker-src blob:",
+  "require-trusted-types-for 'script'",
+  'trusted-types qsig-worker',
 ]) {
   assert(DOCUMENT_CSP.includes(directive), `document CSP is missing ${directive}`);
 }
@@ -71,10 +73,6 @@ const sourceHtml = await readFile(path.join(root, 'src', 'index.html'), 'utf8');
 assert(
   sourceHtml.includes('content="%DOCUMENT_CSP%"'),
   'index.html must obtain its meta CSP from the shared build-time policy'
-);
-assert(
-  sourceHtml.includes('content="%PRIVATE_KEY_OPERATIONS%"'),
-  'index.html must declare its disabled private-key capability'
 );
 assert(
   !sourceHtml.includes("default-src 'none'"),

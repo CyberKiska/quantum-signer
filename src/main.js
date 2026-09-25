@@ -22,16 +22,11 @@ import { setupLayout } from './ui/layout.js';
 import { setupKeysTab } from './ui/keys.js';
 import { setupVerifyTab } from './ui/verify.js';
 
+// The browser is verification-only: the only key material is a public key.
 const state = {
-  deliveryIsolated: globalThis.crossOriginIsolated === true,
-  privateKeyOperationsAllowed: false,
   keys: {
     public: null,
-    secret: null,
     transitioning: false,
-  },
-  sign: {
-    lastSignature: null,
   },
 };
 
@@ -39,10 +34,7 @@ function wipeStateBytes(appState) {
   const pub = appState.keys.public;
   if (pub?.keyBytes) wipeBytes(pub.keyBytes);
   if (pub?.fileBytes) wipeBytes(pub.fileBytes);
-  if (appState.sign.lastSignature?.bytes) wipeBytes(appState.sign.lastSignature.bytes);
   appState.keys.public = null;
-  appState.keys.secret = null;
-  appState.sign.lastSignature = null;
 }
 
 function enforceTopLevelBrowsingContext() {
@@ -75,14 +67,20 @@ async function main() {
   enforceSecureContext();
   // Worker bytes are embedded at build time inside the SRI-covered app asset.
   const workerUrl = URL.createObjectURL(new Blob([__QSIG_WORKER_SOURCE__], { type: 'text/javascript' }));
-  const workerClient = createWorkerClient(workerUrl);
+  // CSP requires Trusted Types for script sinks. This policy (the only one the
+  // CSP allows) accepts exactly the blob URL created above and nothing else.
+  const workerPolicy = globalThis.trustedTypes?.createPolicy('qsig-worker', {
+    createScriptURL(url) {
+      if (url !== workerUrl) throw new TypeError('Unexpected worker script URL');
+      return url;
+    },
+  });
+  const workerClient = createWorkerClient(workerPolicy ? workerPolicy.createScriptURL(workerUrl) : workerUrl);
 
   setupLayout(state);
   setupKeysTab(state);
   setupVerifyTab(state, workerClient);
 
-  const deliveryWarning = byId('delivery-warning');
-  deliveryWarning.classList.toggle('hidden', state.privateKeyOperationsAllowed);
   const selfTestBtn = byId('sidebar-selftest');
 
   selfTestBtn.addEventListener('click', async () => {
