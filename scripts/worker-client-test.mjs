@@ -66,7 +66,9 @@ class MockWorker {
 
 const scheduler = createFakeScheduler();
 const workers = [];
+let resets = 0;
 const client = createWorkerClient('/assets/worker.js', {
+  onReset: () => { resets++; },
   workerFactory() {
     const worker = new MockWorker();
     workers.push(worker);
@@ -96,8 +98,8 @@ const failing = client.call('VERIFY_TEXT', {}, { timeoutMs: 200 }).then(() => nu
 workers[0].respond({ id: workers[0].messages.at(-1).id, type: 'ERROR', code: 'E_FORMAT_MAGIC', message: 'Invalid file magic header.' });
 assert((await failing)?.code === 'E_FORMAT_MAGIC', 'worker error code was not preserved');
 
-// A timeout terminates the busy worker (it holds no secrets) and fails every
-// pending request; the next call starts exactly one fresh worker.
+// A timeout terminates the busy worker (and any unlocked key with it), fails
+// every pending request and reports the reset; the next call starts one fresh worker.
 const timedCall = client.call('VERIFY_FILE', {}, { timeoutMs: 100 }).then(() => null, (err) => err);
 const bystander = client.call('HASH_TEXT', { text: 'x' }, { timeoutMs: 1_000 }).then(() => null, (err) => err);
 const timedRequest = workers[0].messages.at(-2);
@@ -107,6 +109,7 @@ assert(timeoutError?.message.includes('Operation timed out after 100ms'), 'timed
 assert(workers[0].terminated, 'timed-out worker was left running and busy');
 assert((await bystander) instanceof Error, 'requests on the timed-out worker were not failed');
 assert(workers.length === 1, 'timeout eagerly constructed a replacement worker');
+assert(resets === 1, 'timeout did not report the worker reset');
 // A late message from the terminated worker must not resolve anything.
 workers[0].respond({ id: timedRequest.id, type: 'RESULT', result: { stale: true } });
 
@@ -122,11 +125,19 @@ assert((await failedCall)?.message === 'Cryptographic worker failed', 'worker fa
 assert(workers[1].terminated, 'failed worker was not terminated');
 workers[1].onerror?.(new Error('repeated synthetic worker failure'));
 assert(workers.length === 2, 'asynchronous failure caused a restart loop');
+assert(resets === 2, 'worker failure was not reported exactly once');
+
+// Explicit reset (lock): terminate, reject pending work, report; idempotent while no worker runs.
+const locked = client.call('SIGN', {}, { timeoutMs: 200 }).then(() => null, (err) => err);
+client.reset();
+assert(workers[2].terminated && (await locked)?.message === 'Cryptographic worker was restarted', 'reset did not terminate and reject');
+client.reset();
+assert(resets === 3, 'reset was not reported exactly once');
 
 const lastCall = client.call('HASH_TEXT', { text: 'x' }, { timeoutMs: 200 }).then(() => null, (err) => err);
-assert(workers.length === 3, 'next call after failure did not create one replacement worker');
+assert(workers.length === 4, 'next call after reset did not create one replacement worker');
 client.destroy();
-assert(workers[2].terminated, 'replacement worker was not terminated on client destroy');
+assert(workers[3].terminated, 'replacement worker was not terminated on client destroy');
 assert((await lastCall)?.message === 'Cryptographic worker was terminated', 'destroy did not reject pending calls');
 assert((await client.call('HASH_TEXT', {}).catch((err) => err))?.message.includes('destroyed'), 'destroyed client accepted a call');
 console.log('Worker-client lifecycle tests: PASS');

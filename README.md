@@ -1,12 +1,12 @@
 # Quantum Signer
 
-Post-quantum detached signatures with a native Node/OpenSSL signing CLI and a verification-only browser application.
+Post-quantum detached signatures with two interfaces to one cryptographic core: a browser application and a native Node/OpenSSL command line tool. Both generate keys, sign and verify, and read and write the same key and signature files.
 
-**Version: 2.1.0.** Signing runs locally through Node/OpenSSL; the browser is verification-only. The project does not claim FIPS module validation or independent security certification. See [release verification](docs/RELEASE.md) for authenticating downloaded artifacts.
+**Version: 2.1.0.** The browser signs in an isolated worker with pinned JavaScript cryptography; the CLI signs through Node/OpenSSL. The project does not claim FIPS module validation or independent security certification. See [release verification](docs/RELEASE.md) for authenticating downloaded artifacts.
 
 For agent operation, use the [Quantum Signer skill](docs/quantum-signer/SKILL.md), with exact workflows, recovery steps, and code/runtime verification evidence.
 
-## Signing locally
+## Command line
 
 Use Node.js 26 or newer with ML-DSA and SLH-DSA support. From an authenticated source checkout:
 
@@ -38,16 +38,24 @@ node src/native/cli.mjs public --secret signer.pqse --out signer.pqpk
 
 The source CLI needs no third-party runtime cryptography. Signing, key generation, verification and SHA-3 use `node:crypto`; password protection uses standard Web Crypto. Private operations use native KeyObjects, pairwise key checks, and signature/container self-verification. There is no JavaScript signing fallback.
 
-## Browser verification
+## Browser
 
 ```sh
 npm ci
 npm run preview
 ```
 
-Open the displayed loopback address. Select a public `.pqpk` key from a trusted source, then the original file/text and `.qsig`. Browser key generation, private-key imports/exports and signing have been removed, including the worker handlers. The Sign tab explains local CLI use.
+Open the displayed loopback address.
 
-The browser runs public-only NIST known-answer tests at startup. Failure blocks worker operations. Worker bytes are embedded in the SRI-covered application bundle. Browser verification and hashing use pinned Noble libraries because complete native browser support for all suites is not uniform.
+**Keys:** generate a key (passphrase of at least 15 code points) and save the encrypted `.pqse` and public `.pqpk`, or unlock an existing `.pqse` from the CLI. Browser keys are the same PQSE 3 / PKCS#8 files the CLI writes (ML-DSA keys are stored seed-only, RFC 9881), so either interface can use them. Legacy PQSE 1/2 and PQSK keys load with a migration warning.
+
+**Sign:** select a file or plain text, review its SHA3-512 digest and the signer fingerprint, then sign. The worker signs only that reviewed digest with that key, as the CLI's `--expect-sha3-512` does, and the page re-parses the `.qsig` against the review before offering it.
+
+**Verify:** select a public `.pqpk` key from a trusted source, then the original file/text and `.qsig`.
+
+The private key lives only in the worker: it never crosses to the page, is never stored, and there is no plaintext export. **Lock** terminates the worker; so do 15 idle minutes, closing the tab and worker timeouts. Before its first private operation per suite, the worker checks its signer against NIST ACVP data (ML-DSA key generation and a signing round trip), and every generated or imported key passes a pairwise test. Signatures are hedged (fresh randomness from `crypto.getRandomValues`) and verified before release. Argon2id takes a few seconds; SLH-DSA signing in JavaScript takes several seconds per signature, ML-DSA milliseconds.
+
+The browser runs public NIST known-answer tests at startup. Failure blocks worker operations. Worker bytes are embedded in the SRI-covered application bundle, and the build refuses private-key code in the main-thread bundle. Browser ML-DSA/SLH-DSA, SHA-3 and Argon2id use pinned noble libraries because stable Web Crypto does not provide them; AES-256-GCM, SHA-256 and randomness use Web Crypto.
 
 A matching selected key gives `VALID`; an embedded key alone gives `UNTRUSTED` (integrity only); a mismatched selected key or changed payload gives `INVALID`. CLI exit statuses are respectively 0, 2, and 1. Verification results are fail-safe: `valid` is `true` only when the signature and payload check out *and* an independently selected key was used. The embedded-key case reports `valid: false`, `integrityValid: true` and code `E_SIGNER_UNTRUSTED`, because anyone can sign any file with their own embedded key. Integrations must accept only `valid: true`. A selected key is a trust input, not proof of its owner's identity: compare the full fingerprint through a trusted channel.
 
@@ -78,14 +86,15 @@ The manual release workflow separates dependency-running builds from the job tha
 
 `npm run package:release` creates `release/` with the standalone native CLI, browser build, licenses, specification and manifest. Run the authenticated standalone CLI as `node release/quantum-signer.mjs ...`.
 
-GitHub Pages remains a manual, header-limited verification demo. Other static hosts should apply `dist/_headers` and validate the actual responses. Compromise of the HTML/origin can still falsify browser results; an authenticated local release is the stronger delivery model.
+GitHub Pages remains a manual, header-limited verification demo. Other static hosts should apply `dist/_headers` and validate the actual responses. Compromise of the HTML/origin can still falsify browser results and capture keys and passwords entered there; an authenticated local release is the stronger delivery model.
 
 ## Limitations and trust model
 
 - No PKI: there is no certificate chain, key expiry, revocation or signer identity binding. The trust anchor is the full SHA3-256 fingerprint of a public key obtained through a trusted channel. A compromised key cannot be retired within the format; rotate keys and redistribute fingerprints out of band.
 - No trusted time: filename, MIME type and timestamps are not signed, and there is no RFC 3161 timestamp token, so a signature does not prove *when* it was made.
 - `.pqpk` files carry only a CRC-32, which detects damage but does not authenticate the key.
-- The browser and CLI use different verifier implementations (noble and OpenSSL); both are tested against the same NIST and Wycheproof vectors.
+- The browser and CLI use different signer and verifier implementations (noble and OpenSSL); both are tested against the same NIST and Wycheproof vectors and against each other.
+- Browser signing trusts the serving origin and the browser. While unlocked, the key and derived secrets are in JavaScript memory that cannot be reliably erased. For high-value keys, use the CLI or an authenticated local release on a dedicated origin.
 - No FIPS 140-3 module validation, SP 800-90B entropy-source claim or independent third-party audit is claimed.
 
 ## License

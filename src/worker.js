@@ -1,22 +1,31 @@
 import { hashBytesSHA3512, hashFileSHA3512 } from './crypto/browser-hashing.js';
 import { ErrorCode, createError, normalizeError } from './crypto/errors.js';
-import { MAX_PAYLOAD_FILE_BYTES, MAX_SIGNATURE_FILE_BYTES, MAX_TEXT_INPUT_BYTES,
+import { MAX_KEY_FILE_BYTES, MAX_PAYLOAD_FILE_BYTES, MAX_SIGNATURE_FILE_BYTES, MAX_TEXT_INPUT_BYTES,
   assertBytesLimit, assertFileSizeLimit, assertMaxLength } from './crypto/policy.js';
-import { HashAlgId, getHashName, unpackSignatureV2 } from './formats/containers.js';
+import { HashAlgId, getHashName, packPublicKey, unpackSecretKey, unpackSignatureV2 } from './formats/containers.js';
 import { bytesToHexLower } from './formats/encoding.js';
 import { validateRequired } from './crypto/validate.js';
 import { runVerificationSelfTest } from './crypto/verification-selftest.js';
 import { verifyBytes } from './crypto/browser-verification.js';
 import { sha3_512 } from '@noble/hashes/sha3.js';
-import { wipeBytes } from './crypto/bytes.js';
+import { equalsHex, wipeBytes } from './crypto/bytes.js';
 import { utf8ToBytesStrict } from './crypto/text-encoding.js';
 import { finalizePayloadVerification } from './crypto/verify-policy.js';
+import { computeFingerprintHex } from './crypto/fingerprint.js';
+import { createDetachedSignature } from './crypto/detached-signature.js';
+import { decryptSecretKeyFile, encryptSecretKeyFile, isProtectedSecretKeyFile } from './crypto/key-protection.js';
+import { generatePrivateKey, importPrivateKey, signMessage } from './crypto/browser-signing.js';
 
 export const WorkerMessageType = Object.freeze({
   HASH_FILE: 'HASH_FILE', HASH_TEXT: 'HASH_TEXT', VERIFY_FILE: 'VERIFY_FILE', VERIFY_TEXT: 'VERIFY_TEXT', SELFTEST: 'SELFTEST',
+  KEYGEN: 'KEYGEN', UNLOCK: 'UNLOCK', SIGN: 'SIGN',
 });
 const Handlers = Object.freeze({ HASH_FILE: handleHashFile, HASH_TEXT: handleHashText,
-  VERIFY_FILE: handleVerifyFile, VERIFY_TEXT: handleVerifyText, SELFTEST: handleSelfTest });
+  VERIFY_FILE: handleVerifyFile, VERIFY_TEXT: handleVerifyText, SELFTEST: handleSelfTest,
+  KEYGEN: handleKeygen, UNLOCK: handleUnlock, SIGN: handleSign });
+// The only private key in this worker. It never crosses postMessage; the page
+// locks it by terminating the worker, and a new KEYGEN/UNLOCK replaces it.
+let activeKey = null;
 // Startup KATs use only public NIST fixtures. A failure latches this worker closed.
 let healthy = false;
 const runKats = () => runVerificationSelfTest({ verifyBytes, sha3_512 });
@@ -34,7 +43,7 @@ self.onmessage = async (event) => {
       throw createError(ErrorCode.E_WORKER_PROTOCOL, { reason: 'unsupported_request' });
     }
     if (!healthy) throw createError(ErrorCode.E_INTERNAL);
-    if (busy) throw createError(ErrorCode.E_WORKER_PROTOCOL, { reason: 'worker_busy' });
+    if (busy) throw createError(ErrorCode.E_WORKER_BUSY);
     busy = true; ownsRequest = true;
     const result = await Handlers[type](id, request.payload || {});
     postMessage({ id, type: 'RESULT', op: type, ok: true, result });
@@ -151,4 +160,72 @@ function handleSelfTest() {
     healthy = healthy && report.ok;
     return { ...report, ok: healthy };
   } catch (error) { healthy = false; throw error; }
+}
+
+function setActiveKey(key) {
+  wipeBytes(activeKey?.secretKey);
+  const fingerprintHex = computeFingerprintHex(key.publicKey);
+  activeKey = { ...key, fingerprintHex };
+  return { suiteId: key.suiteId, fingerprintHex, publicKeyFile: packPublicKey({ suiteId: key.suiteId, keyBytes: key.publicKey }) };
+}
+
+function requirePassphrase(passphrase) {
+  if (typeof passphrase !== 'string') throw createError(ErrorCode.E_KEY_PASSPHRASE_REQUIRED);
+  return passphrase;
+}
+
+// Encrypted PQSE 3 output only; the plaintext PKCS#8 is wiped before returning.
+async function handleKeygen(_id, payload) {
+  const passphrase = requirePassphrase(payload.passphrase);
+  const { key, pkcs8 } = await generatePrivateKey(payload.suiteId);
+  try {
+    const secretKeyFile = await encryptSecretKeyFile({ suiteId: key.suiteId, secretKeyFile: pkcs8, passphrase, keyFormat: 'pkcs8' });
+    return { ...setActiveKey(key), secretKeyFile };
+  } catch (error) { wipeBytes(key.secretKey); throw error; }
+  finally { wipeBytes(pkcs8); }
+}
+
+// Loads PQSE 1/2/3 or legacy plaintext PQSK, as the CLI does.
+async function handleUnlock(_id, payload) {
+  const file = payload.secretKeyFile;
+  assertBytesLimit(file, MAX_KEY_FILE_BYTES, 'secretKeyFile');
+  const opened = isProtectedSecretKeyFile(file)
+    ? await decryptSecretKeyFile(file, requirePassphrase(payload.passphrase))
+    : { keyFormat: 'pqsk', legacy: true, secretKeyFile: Uint8Array.from(file) };
+  let legacyKey;
+  try {
+    if (opened.keyFormat === 'pkcs8') {
+      return { ...setActiveKey(await importPrivateKey(opened.suiteId, opened.secretKeyFile, 'pkcs8')), legacy: opened.legacy };
+    }
+    legacyKey = unpackSecretKey(opened.secretKeyFile);
+    if (opened.suiteId !== undefined && legacyKey.suiteId !== opened.suiteId) throw createError(ErrorCode.E_KEY_SUITE_MISMATCH);
+    return { ...setActiveKey(await importPrivateKey(legacyKey.suiteId, legacyKey.keyBytes, 'raw')), legacy: true };
+  } finally { wipeBytes(opened.secretKeyFile); wipeBytes(legacyKey?.keyBytes); }
+}
+
+// Signs only the digest and signer the page reviewed (CLI --expect-sha3-512).
+async function handleSign(id, payload) {
+  const { expectedDigestHex, expectedFingerprintHex } = payload;
+  if (typeof expectedDigestHex !== 'string' || !/^[0-9a-f]{128}$/u.test(expectedDigestHex)) {
+    throw createError(ErrorCode.E_HASH_HEX_INVALID);
+  }
+  const key = activeKey;
+  if (!key) throw createError(ErrorCode.E_SESSION_MISSING);
+  if (typeof expectedFingerprintHex !== 'string' || !equalsHex(expectedFingerprintHex, key.fingerprintHex)) {
+    throw createError(ErrorCode.E_SESSION_MISSING, { reason: 'signer_changed' });
+  }
+  const hasText = typeof payload.text === 'string';
+  if (hasText === (payload.file !== undefined)) throw createError(ErrorCode.E_INPUT_REQUIRED, { field: 'file|text' });
+  const hashed = hasText ? await handleHashText(id, payload) : await handleHashFile(id, payload);
+  if (!equalsHex(hashed.hashHex, expectedDigestHex)) {
+    throw createError(ErrorCode.E_FILE_HASH_MISMATCH, { reason: 'reviewed_digest' });
+  }
+  const signatureFile = createDetachedSignature({
+    suiteId: key.suiteId, publicKey: key.publicKey, payloadDigest: hashed.hashBytes,
+    sign: (message, contextBytes) => signMessage({ ...key, message, contextBytes }),
+  });
+  return {
+    suiteId: key.suiteId, fingerprintHex: key.fingerprintHex, hashHex: hashed.hashHex,
+    inputLength: hashed.inputLength, signatureFile,
+  };
 }

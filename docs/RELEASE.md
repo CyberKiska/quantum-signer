@@ -1,6 +1,6 @@
 # Release verification
 
-Quantum Signer 2.1.0 provides local signing through Node.js 26+ and a verification-only browser application. The native CLI supports all six QSIG suites. Browser private-key operations are unavailable.
+Quantum Signer 2.1.0 provides signing and verification through Node.js 26+ and a client-only browser application. Both support all six QSIG suites and share key and signature formats. Browser signing trusts the serving origin, so authenticate what you serve.
 
 ## Authenticate before executing
 

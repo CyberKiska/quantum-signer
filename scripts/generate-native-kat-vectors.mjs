@@ -33,7 +33,7 @@ const slhDsaSecretKeys = slhSigGen.vectors.map((vector) => ({
   secretKeyHex: Buffer.from(vector.secretKeyBase64, 'base64').toString('hex'),
 }));
 
-await writeFile(new URL('../src/native/kat-vectors.json', import.meta.url), `${JSON.stringify({
+await writeFile(new URL('../src/crypto/kat-vectors.json', import.meta.url), `${JSON.stringify({
   schema: 'quantum-signer-native-kat/v1',
   note: 'Public NIST ACVP test data only. No user key material.',
   source: {

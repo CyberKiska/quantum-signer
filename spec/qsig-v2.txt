@@ -151,19 +151,24 @@ maximum 1024 encoded bytes, minimum 15 code points for new encryption
 line and is not password data. Creation snapshots plaintext before awaits;
 opening snapshots the whole envelope. All header, algorithm, version, size, cost,
 tag and suite mismatches MUST fail closed. PQSE versions are key-file versions,
-not changes to the QSIG signature protocol. The CLI warns when it loads PQSE 1/2
-or plaintext PQSK keys.
-PKCS#8 keys are decoded by Node/OpenSSL; ML-DSA seed-only export is supported.
+not changes to the QSIG signature protocol. Both implementations warn when they
+load PQSE 1/2 or plaintext PQSK keys.
+PKCS#8 keys are decoded by Node/OpenSSL in the CLI and by a strict DER decoder in
+the browser: OneAsymmetricKey version 0, exact algorithm OID with absent
+parameters, no attributes or publicKey, minimal lengths, no trailing bytes.
+ML-DSA accepts the RFC 9881 seed, expandedKey and both forms; in both, the
+expanded key MUST equal the one derived from the seed. New ML-DSA keys are
+written seed-only; new SLH-DSA keys as the raw private key (RFC 9909).
 Legacy expanded ML-DSA imports use RFC 9881's expandedKey OCTET STRING wrapped in
 PKCS#8, with absent AlgorithmIdentifier parameters. SLH-DSA imports use raw-private
-Node key format. Every generated/imported native key passes a sign/verify pairwise
+Node key format. Every generated/imported key passes a sign/verify pairwise
 test. Every emitted QSIG passes primitive and parsed-container self-verification.
 
 Resource limits (also enforced before expensive operations where possible)
 Payload 1 GiB; text 8 MiB UTF-8; key file 32 KiB; signature file 128 KiB;
 authenticated metadata 8 KiB; raw signature 64 KiB; context maximum 255 bytes at
-the primitive adapter, fixed 17 bytes in QSIG. Browser verification serializes
-worker requests and rejects concurrent requests while one is active.
+the primitive adapter, fixed 17 bytes in QSIG. The browser worker serializes
+requests and rejects concurrent requests while one is active.
 
 Implementation boundaries and normative references
 FIPS 204 (ML-DSA): https://csrc.nist.gov/pubs/fips/204/final
@@ -183,17 +188,24 @@ QSIG does not claim conformance to those distinct protocol profiles.
 FIPS 140-3 / ISO/IEC 19790 and 24759: module validation requires separate evidence.
 https://nodejs.org/api/crypto.html documents the native integration API.
 
-Only the local CLI performs supported private operations, using Node/OpenSSL
-KeyObjects. It requires OpenSSL 3.5.0 or newer and, before the first use of each
-suite in a process, runs NIST ACVP-derived self-tests: SHA3-256/512 KATs, pure
-verification KAT with wrong-context/message/signature rejections, ML-DSA KeyGen
-from an ACVP seed, and before private operations a signature from the ACVP key
-checked against the ACVP public key. Any failure stops all native operations. The browser exposes verification and hashing only. Browser SHA-3 and
-PQ verification use pinned JavaScript dependencies because the required complete
-suite set is not uniformly available through Web Crypto. Browser workers do not
-import private sessions, private-key protection or the reference signing adapter.
-The JavaScript reference signer used for cross-implementation tests lives in
-scripts/lib and is excluded from all shipped bundles by the build.
-Native KeyObjects reduce JS exposure of expanded secrets but do not provide a
+The CLI performs private operations with Node/OpenSSL KeyObjects. It requires
+OpenSSL 3.5.0 or newer and, before the first use of each suite in a process, runs
+NIST ACVP-derived self-tests: SHA3-256/512 KATs, pure verification KAT with
+wrong-context/message/signature rejections, ML-DSA KeyGen from an ACVP seed, and
+before private operations a signature from the ACVP key checked against the ACVP
+public key. Any failure stops all native operations.
+The browser performs private operations only inside its worker, with the same
+detached-signature construction, key files and ACVP-derived checks (verification
+KATs at startup; ML-DSA KeyGen and an ACVP-key signing round trip before the
+first private operation per suite). Failures latch the affected operations
+closed. Browser ML-DSA/SLH-DSA, SHA-3 and Argon2id use pinned JavaScript
+dependencies because Web Crypto does not provide them; AES-GCM, SHA-256 and
+randomness use Web Crypto. The worker signs only the payload digest and signer
+reviewed by the page; the main-thread bundle contains no private-key code and
+never receives a private key. The JavaScript reference signer used for
+cross-implementation tests lives in scripts/lib and is excluded from all
+shipped bundles by the build.
+Native KeyObjects reduce JS exposure of expanded secrets; browser keys are
+ordinary JavaScript memory. Neither provides a
 hardware boundary or guaranteed erasure of passwords, transient exports, runtime
 copies or OS memory. Native provider use is not evidence of FIPS validation.

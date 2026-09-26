@@ -35,12 +35,12 @@ const TEXT_PREVIEW_DEBOUNCE_MS = 180;
 const DECEPTIVE_TEXT_CODE_POINT =
   /[\u00ad\u061c\u115f\u1160\u180e\u200b-\u200f\u202a-\u202e\u2028\u2029\u2060-\u2064\u2066-\u2069\u3164\ufeff\ufff9-\ufffb]/gu;
 
-export function describeDeceptiveText(text) {
+export function describeDeceptiveText(text, action = 'verified') {
   const matches = String(text).match(DECEPTIVE_TEXT_CODE_POINT) ?? [];
   if (matches.length === 0) return null;
   const distinct = [...new Set(matches)].slice(0, 8)
     .map((char) => `U+${char.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
-  return `${matches.length} invisible or bidirectional control character(s): ${distinct.join(', ')}. What you see may not be what is verified.`;
+  return `${matches.length} invisible or bidirectional control character(s): ${distinct.join(', ')}. What you see may not be what is ${action}.`;
 }
 
 function isSlowSuite(suiteId) {

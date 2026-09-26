@@ -20,12 +20,16 @@ import { wipeBytes } from './crypto/bytes.js';
 import { byId, createWorkerClient, showToast, workerFriendlyError } from './ui/common.js';
 import { setupLayout } from './ui/layout.js';
 import { setupKeysTab } from './ui/keys.js';
+import { setupSignTab } from './ui/sign.js';
 import { setupVerifyTab } from './ui/verify.js';
 
-// The browser is verification-only: the only key material is a public key.
+// The page holds public data only: the verification key and, for an unlocked
+// signing key, its public key and (after generation) its PQSE 3 file. The
+// private key exists only inside the worker.
 const state = {
   keys: {
     public: null,
+    secret: null,
     transitioning: false,
   },
 };
@@ -34,7 +38,9 @@ function wipeStateBytes(appState) {
   const pub = appState.keys.public;
   if (pub?.keyBytes) wipeBytes(pub.keyBytes);
   if (pub?.fileBytes) wipeBytes(pub.fileBytes);
+  wipeBytes(appState.keys.secret?.secretKeyFile);
   appState.keys.public = null;
+  appState.keys.secret = null;
 }
 
 function enforceTopLevelBrowsingContext() {
@@ -75,10 +81,13 @@ async function main() {
       return url;
     },
   });
-  const workerClient = createWorkerClient(workerPolicy ? workerPolicy.createScriptURL(workerUrl) : workerUrl);
+  const workerClient = createWorkerClient(workerPolicy ? workerPolicy.createScriptURL(workerUrl) : workerUrl, {
+    onReset: () => window.dispatchEvent(new Event('signing-key:reset')),
+  });
 
   setupLayout(state);
-  setupKeysTab(state);
+  setupKeysTab(state, workerClient);
+  setupSignTab(state, workerClient);
   setupVerifyTab(state, workerClient);
 
   const selfTestBtn = byId('sidebar-selftest');
@@ -116,11 +125,15 @@ async function main() {
     workerClient.destroy();
     URL.revokeObjectURL(workerUrl);
   };
+  // pagehide, not beforeunload: a cancelled navigation must not lock the key.
   window.addEventListener('pagehide', teardown, { once: true });
-  window.addEventListener('beforeunload', teardown, { once: true });
+  window.addEventListener('beforeunload', (event) => {
+    const secret = state.keys.secret;
+    if (secret?.secretKeyFile && !secret.saved) event.preventDefault();
+  });
   window.addEventListener('pageshow', (event) => {
     // A page placed into the back/forward cache has already destroyed its
-    // verification worker. Reload instead of restoring stale session handles.
+    // worker and any unlocked key. Reload instead of restoring stale state.
     if (event.persisted) window.location.reload();
   });
 }

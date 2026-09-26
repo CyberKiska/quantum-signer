@@ -13,6 +13,7 @@ export const ErrorCode = Object.freeze({
   E_HASH_UNSUPPORTED: 'E_HASH_UNSUPPORTED',
   E_KEY_SUITE_MISMATCH: 'E_KEY_SUITE_MISMATCH',
   E_KEY_CONSISTENCY: 'E_KEY_CONSISTENCY',
+  E_KEY_FORMAT: 'E_KEY_FORMAT',
   E_KEY_PASSPHRASE_REQUIRED: 'E_KEY_PASSPHRASE_REQUIRED',
   E_KEY_PASSPHRASE_INVALID: 'E_KEY_PASSPHRASE_INVALID',
   E_KEY_DECRYPT_FAILED: 'E_KEY_DECRYPT_FAILED',
@@ -26,6 +27,7 @@ export const ErrorCode = Object.freeze({
   E_SIGNER_UNTRUSTED: 'E_SIGNER_UNTRUSTED',
   E_FILE_HASH_MISMATCH: 'E_FILE_HASH_MISMATCH',
   E_WORKER_PROTOCOL: 'E_WORKER_PROTOCOL',
+  E_WORKER_BUSY: 'E_WORKER_BUSY',
   E_INTERNAL: 'E_INTERNAL',
 });
 
@@ -44,12 +46,13 @@ const MESSAGES = {
   [ErrorCode.E_HASH_UNSUPPORTED]: 'Unsupported hash algorithm.',
   [ErrorCode.E_KEY_SUITE_MISMATCH]: 'Key suite does not match signature suite.',
   [ErrorCode.E_KEY_CONSISTENCY]: 'Private key failed pairwise consistency validation.',
+  [ErrorCode.E_KEY_FORMAT]: 'Unsupported or malformed PKCS#8 private key.',
   [ErrorCode.E_KEY_PASSPHRASE_REQUIRED]: 'This encrypted private key requires a passphrase.',
   [ErrorCode.E_KEY_PASSPHRASE_INVALID]: 'Passphrase does not meet the private-key protection policy.',
   [ErrorCode.E_KEY_DECRYPT_FAILED]: 'Private-key decryption failed. The passphrase or file is incorrect.',
-  [ErrorCode.E_KEY_PROTECTION_UNAVAILABLE]: 'Browser private-key encryption is unavailable.',
+  [ErrorCode.E_KEY_PROTECTION_UNAVAILABLE]: 'Private-key encryption is unavailable in this environment.',
   [ErrorCode.E_SESSION_LIMIT]: 'Secret-session capacity reached; clear an existing session and retry.',
-  [ErrorCode.E_SESSION_MISSING]: 'Secret session not found or already cleared.',
+  [ErrorCode.E_SESSION_MISSING]: 'No signing key is unlocked, or it changed since review. Unlock the key and review again.',
   [ErrorCode.E_EXPORT_AUTH]: 'Secret export authorization failed.',
   [ErrorCode.E_SIGN_SELF_VERIFY]: 'Generated signature failed self-verification; output was discarded.',
   [ErrorCode.E_SIGNATURE_INVALID]: 'Signature verification failed.',
@@ -59,6 +62,7 @@ const MESSAGES = {
     'The signature is intact, but no independently selected public key verified the signer.',
   [ErrorCode.E_FILE_HASH_MISMATCH]: 'Provided file/hash does not match signed file hash.',
   [ErrorCode.E_WORKER_PROTOCOL]: 'Worker protocol error.',
+  [ErrorCode.E_WORKER_BUSY]: 'Another operation is still running. Try again when it finishes.',
   [ErrorCode.E_INTERNAL]: 'Internal error.',
 };
 

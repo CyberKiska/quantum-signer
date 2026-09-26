@@ -74,7 +74,7 @@ assertStandardHeaders(documentResponse, { skipHsts: loopbackHttp });
 const documentType = documentResponse.headers.get('Content-Type') || '';
 assert(documentType.toLowerCase().startsWith('text/html'), `document has unsafe MIME type: ${documentType}`);
 const documentHtml = await documentResponse.text();
-assert(documentHtml.includes('Verification Only'), 'document is not the verification-only application');
+assert(documentHtml.includes('<title>Quantum Signer</title>'), 'document is not the Quantum Signer application');
 assert(!documentHtml.includes('%DOCUMENT_CSP%'), 'document contains an unreplaced CSP placeholder');
 
 const appUrl = new URL('assets/app.js', deploymentUrl);

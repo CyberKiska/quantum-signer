@@ -3,7 +3,7 @@ import { getSuiteMetadata, assertKeyLength, listSuites, verificationInputsWellFo
 import { MAX_KEY_FILE_BYTES, assertBytesLimit } from '../crypto/policy.js';
 import { runVerificationSelfTest } from '../crypto/verification-selftest.js';
 import { sha3_512 } from '../crypto/native-hashes.js';
-import kat from './kat-vectors.json' with { type: 'json' };
+import kat from '../crypto/kat-vectors.json' with { type: 'json' };
 
 // OpenSSL 3.5.0 is the first release implementing FIPS 204 ML-DSA and FIPS 205
 // SLH-DSA with the context-string API. The startup self-tests below are the

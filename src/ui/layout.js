@@ -5,6 +5,7 @@ export function setupLayout(state) {
   const navItems = document.querySelectorAll('.nav-item');
   const panels = document.querySelectorAll('.tab-panel');
   const pubKeyFpEl = byId('ctx-pub-fp');
+  const signKeyEl = byId('ctx-sign-key');
 
   function activateTab(tabName) {
     navItems.forEach((item) => item.classList.toggle('active', item.dataset.tab === tabName));
@@ -33,6 +34,10 @@ export function setupLayout(state) {
       pubKeyFpEl.title = '';
       setContextTone(pubKeyFpEl, 'muted');
     }
+    const secret = state.keys.secret;
+    signKeyEl.textContent = secret ? `${getSuiteName(secret.suiteId)} / ${secret.fingerprintHex.slice(0, 16)}...` : 'Locked';
+    signKeyEl.title = secret ? `SHA3-256: ${secret.fingerprintHex}` : '';
+    setContextTone(signKeyEl, secret ? 'warning' : 'muted');
   }
 
   const toastContainer = byId('toast-container');
