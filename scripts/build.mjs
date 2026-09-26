@@ -9,8 +9,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, '..');
 
-// Browser bundles must never contain private-key code or test-only references.
-const PRIVATE_OR_TEST_INPUT = /(?:^|\/)(?:scripts\/|src\/native\/|src\/crypto\/key-protection\.js)/u;
+// Browser bundles never contain Node-only or test-only code.
+const NODE_OR_TEST_INPUT = /(?:^|\/)(?:scripts\/|src\/native\/|src\/crypto\/native-)/u;
+// Private-key code runs only in the worker, never in the page's main thread.
+const PRIVATE_KEY_INPUT = /@noble\/post-quantum|@noble\/hashes\/(?:esm\/)?argon2|src\/crypto\/(?:key-protection|browser-signing|pkcs8|browser-argon2)\.js/u;
 
 export function normalizeBasePath(value) {
   if (!value || value.trim() === '') return '/';
@@ -51,9 +53,9 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
     metafile: true, logLevel: 'silent',
   });
   const workerSource = workerBuild.outputFiles[0].text;
-  const forbiddenWorkerInputs = Object.keys(workerBuild.metafile.inputs).filter(input => PRIVATE_OR_TEST_INPUT.test(input));
-  if (forbiddenWorkerInputs.length) throw new Error(`Private-key entry point in browser worker: ${forbiddenWorkerInputs.join(', ')}`);
-  if (Buffer.byteLength(workerSource) > 256 * 1024) throw new Error('Verification worker exceeds 256 KiB');
+  const forbiddenWorkerInputs = Object.keys(workerBuild.metafile.inputs).filter(input => NODE_OR_TEST_INPUT.test(input));
+  if (forbiddenWorkerInputs.length) throw new Error(`Node or test code in browser worker: ${forbiddenWorkerInputs.join(', ')}`);
+  if (Buffer.byteLength(workerSource) > 256 * 1024) throw new Error('Cryptographic worker exceeds 256 KiB');
   const buildResult = await build({
     entryPoints: { app: path.join(srcDir, 'main.js') }, outdir: assetsDir,
     bundle: true, format: 'esm', platform: 'browser', target: ['es2022'],
@@ -63,8 +65,8 @@ export async function buildProject({ minify = true, sourcemap = !minify } = {}) 
   const appOutput = Object.entries(buildResult.metafile.outputs).find(([, output]) => output.entryPoint?.endsWith('src/main.js'));
   if (!appOutput) throw new Error('Missing app entry point');
   const forbiddenAppInputs = Object.keys(appOutput[1].inputs).filter(input =>
-    input.includes('@noble/post-quantum') || PRIVATE_OR_TEST_INPUT.test(input));
-  if (forbiddenAppInputs.length) throw new Error(`Private-key entry point in UI: ${forbiddenAppInputs.join(', ')}`);
+    PRIVATE_KEY_INPUT.test(input) || NODE_OR_TEST_INPUT.test(input));
+  if (forbiddenAppInputs.length) throw new Error(`Private-key or Node code in UI: ${forbiddenAppInputs.join(', ')}`);
   if (minify && appOutput[1].bytes > 384 * 1024) throw new Error('App and embedded worker exceed 384 KiB');
 
   const [htmlTemplate, css, packageText, appBundle] = await Promise.all([

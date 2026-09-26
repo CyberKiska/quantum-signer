@@ -51,7 +51,7 @@ const MESSAGES = {
   [ErrorCode.E_KEY_DECRYPT_FAILED]: 'Private-key decryption failed. The passphrase or file is incorrect.',
   [ErrorCode.E_KEY_PROTECTION_UNAVAILABLE]: 'Private-key encryption is unavailable in this environment.',
   [ErrorCode.E_SESSION_LIMIT]: 'Secret-session capacity reached; clear an existing session and retry.',
-  [ErrorCode.E_SESSION_MISSING]: 'Secret session not found or already cleared.',
+  [ErrorCode.E_SESSION_MISSING]: 'No signing key is unlocked, or it changed since review. Unlock the key and review again.',
   [ErrorCode.E_EXPORT_AUTH]: 'Secret export authorization failed.',
   [ErrorCode.E_SIGN_SELF_VERIFY]: 'Generated signature failed self-verification; output was discarded.',
   [ErrorCode.E_SIGNATURE_INVALID]: 'Signature verification failed.',

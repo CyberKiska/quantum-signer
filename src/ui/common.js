@@ -138,6 +138,7 @@ export function createWorkerClient(
     workerFactory = (url) => new Worker(url, { type: 'module' }),
     setTimer = (callback, delay) => globalThis.setTimeout(callback, delay),
     clearTimer = (timer) => globalThis.clearTimeout(timer),
+    onReset = () => {},
   } = {}
 ) {
   let worker = null;
@@ -193,14 +194,16 @@ export function createWorkerClient(
     return nextWorker;
   }
 
-  // Terminate and reject everything. The worker holds no secrets, so a fresh
-  // one is started lazily by the next explicit call. Restarting from an error
-  // callback could otherwise loop on a broken URL, MIME type, CSP or module.
+  // Terminate and reject everything. Any unlocked signing key dies with the
+  // worker (onReset tells the page); a fresh worker starts lazily on the next
+  // explicit call. Restarting from an error callback could otherwise loop on a
+  // broken URL, MIME type, CSP or module.
   function failWorker(reason) {
     const previous = worker;
     worker = null;
     if (previous) previous.terminate();
     rejectAllPending(reason);
+    if (previous) onReset();
   }
 
   startWorker();
@@ -243,6 +246,10 @@ export function createWorkerClient(
     });
   }
 
+  function reset() {
+    if (!destroyed) failWorker('Cryptographic worker was restarted');
+  }
+
   function destroy() {
     if (destroyed) return;
     destroyed = true;
@@ -251,5 +258,5 @@ export function createWorkerClient(
     worker = null;
   }
 
-  return { call, destroy };
+  return { call, reset, destroy };
 }
