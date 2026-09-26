@@ -10,16 +10,19 @@ Inspected 2026-09-25: application **2.1.0**, branch `release-2.1-hardening`. Run
 
 | Source | Responsibility |
 | --- | --- |
-| `src/index.html`, `src/main.js`, `src/ui/layout.js` | Navigation, top-level and secure-context gates, Trusted Types worker policy, embedded worker creation, teardown. Verification-only; no private-key state. |
-| `src/ui/keys.js` | Public-key import, full fingerprint, canonical PQPK export, clear. |
+| `src/index.html`, `src/main.js`, `src/ui/layout.js` | Navigation, top-level and secure-context gates, Trusted Types worker policy, embedded worker creation, teardown on `pagehide`. The page holds only public data and the encrypted PQSE file of a newly generated key. |
+| `src/ui/keys.js` | Signing key: generate, unlock, save PQSE/PQPK, lock, 15-minute idle lock. Verification public key: import, full fingerprint, canonical PQPK export, clear. |
+| `src/ui/sign.js` | Sign input, digest/signer review, reviewed-value binding of the worker result, `.qsig` save. |
 | `src/ui/verify.js`, `src/core/operation-gate.js` | Previews, review snapshot, deceptive-text warning, stale-result rejection, result display. |
 | `src/ui/common.js` | DOM helpers and the worker client (timeouts terminate and lazily replace the worker). |
-| `src/worker.js` | Public-only allowlist (`HASH_*`, `VERIFY_*`, `SELFTEST`), startup KATs, busy rejection, progress. |
+| `src/worker.js` | Allowlist (`HASH_*`, `VERIFY_*`, `SELFTEST`, `KEYGEN`, `UNLOCK`, `SIGN`), the only unlocked private key, startup KATs, busy rejection, progress. |
+| `src/crypto/detached-signature.js` | QSIG construction and container self-verification shared by the CLI and the worker. |
+| `src/crypto/browser-signing.js`, `src/crypto/pkcs8.js` | Worker-only noble signer, conditional ACVP self-tests, pairwise tests, strict RFC 9881/9909 PKCS#8. |
 | `src/native/cli.mjs`, `src/native/crypto.js`, `src/native/signing.js` | File I/O, password input, native keys, conditional ACVP self-tests, pairwise tests, signing and self-verification, exit policy. |
 | `src/crypto/verify-policy.js` | Shared fail-safe verification policy (browser and CLI). |
 | `src/crypto/suite-metadata.js` | Single suite table and the verification-input guard used by both verifiers. |
 | `src/formats/containers.js`, `src/crypto/policy.js` | Strict QSIG/PQPK/PQSK parsing and size limits. |
-| `src/crypto/key-protection.js` | PQSE 3 (Argon2id + AES-256-GCM) and read-only PQSE 1/2. CLI only; the build refuses it in browser bundles. |
+| `src/crypto/key-protection.js` | PQSE 3 (Argon2id + AES-256-GCM) and read-only PQSE 1/2. CLI and browser worker; the build refuses it in the main-thread bundle. |
 | `scripts/build.mjs`, `scripts/security-headers.mjs`, `scripts/dev.mjs` | Bundling, SRI, CSP and headers, loopback serving. |
 | `scripts/lib/` | Test-only JavaScript reference signer and protocol cases; never shipped. |
 
@@ -28,7 +31,7 @@ Inspected 2026-09-25: application **2.1.0**, branch `release-2.1-hardening`. Run
 | Where | ML-DSA / SLH-DSA | SHA-3 | Key-file protection |
 | --- | --- | --- | --- |
 | CLI | `node:crypto` KeyObjects: `sign(null, msg, {key, context})` and `verify(null, …)` | `node:crypto` | Argon2id from `node:crypto`; AES-256-GCM from Node's WebCrypto |
-| Browser | `@noble/post-quantum` **0.7.1** verifiers | `@noble/hashes` **2.4.0** | — |
+| Browser worker | `@noble/post-quantum` **0.7.1** sign/verify | `@noble/hashes` **2.4.0** | Argon2id from `@noble/hashes`; AES-256-GCM, SHA-256 and randomness from Web Crypto |
 
 **Why the browser still uses noble:**
 - Chromium 152's WebCrypto rejects ML-DSA, SLH-DSA and SHA3 with `NotSupportedError` (runtime-verified).
@@ -118,7 +121,8 @@ QSIG size is `174 + publicKeyLength + signatureLength`.
 - A compromised HTML origin can still replace the program.
 
 **Internal worker messages** (repository integration only, not a public API):
-- Request: `{id, type, payload}`, where `type` is one of `HASH_FILE {file}`, `HASH_TEXT {text}`, `VERIFY_FILE {file, sigFile, publicKeyFile?}`, `VERIFY_TEXT {text, sigFile, publicKeyFile?}` or `SELFTEST {}`.
+- Request: `{id, type, payload}`, where `type` is one of `HASH_FILE {file}`, `HASH_TEXT {text}`, `VERIFY_FILE {file, sigFile, publicKeyFile?}`, `VERIFY_TEXT {text, sigFile, publicKeyFile?}`, `SELFTEST {}`, `KEYGEN {suiteId, passphrase}`, `UNLOCK {secretKeyFile, passphrase}` or `SIGN {file|text, expectedDigestHex, expectedFingerprintHex}`.
+- `KEYGEN`/`UNLOCK` return `{suiteId, fingerprintHex, publicKeyFile}` (plus `secretKeyFile` as PQSE 3, or `legacy`); `SIGN` returns `{suiteId, fingerprintHex, hashHex, inputLength, signatureFile}`. No request returns a private key. Locking is worker termination.
 - Replies: `{type:"RESULT", ok:true, result}`, `{type:"ERROR", ok:false, code, message, details}` or `{type:"PROGRESS", loaded, total, percent}`.
 - `ok:true` means the operation completed, not that a signature is valid.
 
@@ -139,6 +143,8 @@ Also run for this revision:
   - Trusted Types block string `innerHTML`; the app starts with no CSP violations.
   - The self-test passes 27/27; the spec vector gives VALID with its key and integrity-only without it.
   - The bidi text warning is shown.
+
+**Browser signing (2026-09-26, loopback preview in the built-in Chromium):** ML-DSA-44 keygen with default Argon2id ~2.7 s, unlock ~2.8 s, signing ~50 ms; SLH-DSA-SHAKE-128s keygen ~18 s, signing ~7 s. A browser-generated `.pqse` opens in the CLI with the same fingerprint; wrong passwords, lock and re-unlock behave as described. `browser-signing-test` and `test:browser-boundary` check OpenSSL/browser key and signature interoperability in both directions.
 
 **Not established:**
 - Firefox, Safari or mobile engines.
