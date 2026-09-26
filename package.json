@@ -45,6 +45,10 @@
     "#crypto/verification": {
       "node": "./src/native/crypto.js",
       "default": "./src/crypto/browser-verification.js"
+    },
+    "#crypto/argon2": {
+      "node": "./src/crypto/native-argon2.js",
+      "default": "./src/crypto/browser-argon2.js"
     }
   }
 }

@@ -47,7 +47,7 @@ const MESSAGES = {
   [ErrorCode.E_KEY_PASSPHRASE_REQUIRED]: 'This encrypted private key requires a passphrase.',
   [ErrorCode.E_KEY_PASSPHRASE_INVALID]: 'Passphrase does not meet the private-key protection policy.',
   [ErrorCode.E_KEY_DECRYPT_FAILED]: 'Private-key decryption failed. The passphrase or file is incorrect.',
-  [ErrorCode.E_KEY_PROTECTION_UNAVAILABLE]: 'Browser private-key encryption is unavailable.',
+  [ErrorCode.E_KEY_PROTECTION_UNAVAILABLE]: 'Private-key encryption is unavailable in this environment.',
   [ErrorCode.E_SESSION_LIMIT]: 'Secret-session capacity reached; clear an existing session and retry.',
   [ErrorCode.E_SESSION_MISSING]: 'Secret session not found or already cleared.',
   [ErrorCode.E_EXPORT_AUTH]: 'Secret export authorization failed.',

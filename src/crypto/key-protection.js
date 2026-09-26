@@ -1,5 +1,5 @@
-// Password protection for local private-key files (native CLI only; the build
-// forbids this module in browser bundles).
+// Password protection for private-key files, shared by the CLI and the browser
+// signing worker (never the browser main thread).
 //
 // PQSE 3 (current): Argon2id (RFC 9106, via node:crypto) -> AES-256-GCM
 //   (SP 800-38D, WebCrypto). Plaintext: PKCS#8 DER (RFC 5958).
@@ -7,14 +7,11 @@
 //   tests): PBKDF2-HMAC-SHA-512 (SP 800-132 / RFC 8018) -> AES-256-GCM.
 // The entire header, salt and IV are GCM additional data, so every parameter
 // (suite, KDF, cost, lengths) is authenticated.
-import { argon2 as argon2Callback } from 'node:crypto';
-import { promisify } from 'node:util';
+import { argon2id } from '#crypto/argon2';
 import { equalsBytes, wipeBytes } from './bytes.js';
 import { ErrorCode, createError } from './errors.js';
 import { MAX_KEY_FILE_BYTES, assertBytesLimit, assertMaxLength } from './policy.js';
 import { utf8ToBytesStrict } from './text-encoding.js';
-
-const argon2 = promisify(argon2Callback);
 
 export const PROTECTED_SECRET_KEY_MAGIC = Uint8Array.of(0x50, 0x51, 0x53, 0x45); // PQSE
 export const PROTECTED_SECRET_KEY_VERSION_MAJOR = 1;
@@ -122,7 +119,7 @@ function assertArgon2Params(params) {
 let argon2KatPassed = false;
 async function assertArgon2Kat() {
   if (argon2KatPassed) return;
-  const tag = await argon2('argon2id', {
+  const tag = await argon2id({
     message: new Uint8Array(32).fill(1), nonce: new Uint8Array(16).fill(2), secret: new Uint8Array(8).fill(3),
     associatedData: new Uint8Array(12).fill(4), parallelism: 4, tagLength: 32, memory: 32, passes: 3,
   });
@@ -144,7 +141,7 @@ async function deriveAesKey(cryptoApi, passphraseBytes, salt, kdf, usages) {
     );
   }
   await assertArgon2Kat();
-  const raw = new Uint8Array(await argon2('argon2id', {
+  const raw = new Uint8Array(await argon2id({
     message: passphraseBytes, nonce: salt, parallelism: kdf.parallelism, tagLength: AES_KEY_LENGTH,
     memory: kdf.memoryKiB, passes: kdf.passes,
   }));
