@@ -206,8 +206,12 @@ export function setupSignTab(state, workerClient) {
   });
 
   // The worker and the parsed result bind every signature to the reviewed key;
-  // a finished .qsig stays valid after the key is locked.
-  window.addEventListener('keys:updated', render);
+  // a finished .qsig stays valid after the key is locked. A review rejected
+  // while a key operation held the worker is retried once it finishes.
+  window.addEventListener('keys:updated', () => {
+    if (preview.status === 'error' && !state.keys.transitioning && !signGate.busy) inputChanged();
+    else render();
+  });
 
   inputChanged();
 }
