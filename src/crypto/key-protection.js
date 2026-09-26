@@ -12,6 +12,7 @@ import { equalsBytes, wipeBytes } from './bytes.js';
 import { ErrorCode, createError } from './errors.js';
 import { MAX_KEY_FILE_BYTES, assertBytesLimit, assertMaxLength } from './policy.js';
 import { utf8ToBytesStrict } from './text-encoding.js';
+import { bytesToHexLower } from '../formats/encoding.js';
 
 export const PROTECTED_SECRET_KEY_MAGIC = Uint8Array.of(0x50, 0x51, 0x53, 0x45); // PQSE
 export const PROTECTED_SECRET_KEY_VERSION_MAJOR = 1;
@@ -123,7 +124,7 @@ async function assertArgon2Kat() {
     message: new Uint8Array(32).fill(1), nonce: new Uint8Array(16).fill(2), secret: new Uint8Array(8).fill(3),
     associatedData: new Uint8Array(12).fill(4), parallelism: 4, tagLength: 32, memory: 32, passes: 3,
   });
-  if (Buffer.from(tag).toString('hex') !== '0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659') {
+  if (bytesToHexLower(tag) !== '0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659') {
     throw createError(ErrorCode.E_KEY_PROTECTION_UNAVAILABLE, { reason: 'argon2id_kat_failed' });
   }
   argon2KatPassed = true;
