@@ -27,6 +27,7 @@ export const ErrorCode = Object.freeze({
   E_SIGNER_UNTRUSTED: 'E_SIGNER_UNTRUSTED',
   E_FILE_HASH_MISMATCH: 'E_FILE_HASH_MISMATCH',
   E_WORKER_PROTOCOL: 'E_WORKER_PROTOCOL',
+  E_WORKER_BUSY: 'E_WORKER_BUSY',
   E_INTERNAL: 'E_INTERNAL',
 });
 
@@ -61,6 +62,7 @@ const MESSAGES = {
     'The signature is intact, but no independently selected public key verified the signer.',
   [ErrorCode.E_FILE_HASH_MISMATCH]: 'Provided file/hash does not match signed file hash.',
   [ErrorCode.E_WORKER_PROTOCOL]: 'Worker protocol error.',
+  [ErrorCode.E_WORKER_BUSY]: 'Another operation is still running. Try again when it finishes.',
   [ErrorCode.E_INTERNAL]: 'Internal error.',
 };
 

@@ -36,7 +36,7 @@
         <div>
           <div class="header-group">
             <h1>Quantum Signer</h1>
-            <p class="subtitle">Post-quantum signature<br />verification</p>
+            <p class="subtitle">Post-quantum detached<br />signatures</p>
           </div>
 
           <nav class="nav-menu" role="tablist" aria-label="Primary">
@@ -51,7 +51,7 @@
             <span>System Status</span>
             <span class="context-val status-line">
               <span class="status-indicator secure"></span>
-              <span>Verification Only</span>
+              <span>Local Only</span>
             </span>
           </div>
           <div class="context-row">
@@ -59,15 +59,15 @@
             <span id="ctx-pub-fp" class="context-val">Not Loaded</span>
           </div>
           <div class="context-row">
-            <span>Signing</span>
-            <span class="context-val status-muted">Local CLI</span>
+            <span>Signing Key</span>
+            <span id="ctx-sign-key" class="context-val status-muted">Locked</span>
           </div>
           <button id="sidebar-selftest" class="sidebar-selftest" type="button">Run Self-test</button>
           <div class="sidebar-note">
             Memory-only session.<br />
             No network calls.<br />
             Not FIPS validated.<br />
-            Public keys only.<br />
+            Keys never leave this tab.<br />
             <a href="https://github.com/CyberKiska/quantum-signer" target="_blank" rel="noopener noreferrer">Source code</a>
             <br />Build: <span class="build-id" title="%BUILD_COMMIT%">%BUILD_COMMIT_SHORT%</span>
           </div>
@@ -77,14 +77,44 @@
       <main class="main-content">
         <div id="toast-container" class="toast-container"></div>
         <div id="delivery-warning" class="delivery-warning" role="status">
-          This browser verifies signatures. Use the local command line tool in the Sign tab to generate keys and sign files.
+          Browser signing trusts this page's origin with your key and password. For high-value keys, use an authenticated local release or the command line tool.
         </div>
 
         <section id="tab-keys" class="tab-panel module-panel module-keys active">
-          <header class="section-header"><h2>Verification Key</h2></header>
+          <header class="section-header"><h2>Keys</h2></header>
           <div class="panel-grid">
             <div class="card full-width">
-              <h3>Select a trusted public key</h3>
+              <h3>Signing key</h3>
+              <p class="muted-copy">The private key is held only by this tab's isolated worker and is never stored by the browser. Key files are PQSE 3 (Argon2id, AES-256-GCM) and work with the command line tool. Locking or closing the tab discards it.</p>
+              <div class="split-grid">
+                <form id="keygen-form" class="form-group" autocomplete="on">
+                  <label for="keygen-suite">Generate: algorithm</label>
+                  <select id="keygen-suite"></select>
+                  <label for="keygen-passphrase" class="spaced-label">New passphrase (15+ characters)</label>
+                  <input id="keygen-passphrase" type="password" autocomplete="new-password" minlength="15" maxlength="1024" required />
+                  <label for="keygen-confirm" class="spaced-label">Repeat passphrase</label>
+                  <input id="keygen-confirm" type="password" autocomplete="new-password" minlength="15" maxlength="1024" required />
+                  <div class="button-group compact"><button id="keygen-run" class="primary" type="submit">Generate Key</button></div>
+                </form>
+                <form id="unlock-form" class="form-group" autocomplete="on">
+                  <label for="unlock-file">Unlock: private key (.pqse)</label>
+                  <input id="unlock-file" type="file" accept=".pqse,.pqsk" required />
+                  <label for="unlock-passphrase" class="spaced-label">Passphrase</label>
+                  <input id="unlock-passphrase" type="password" autocomplete="current-password" maxlength="1024" />
+                  <div class="button-group compact"><button id="unlock-run" class="primary" type="submit">Unlock Key</button></div>
+                </form>
+              </div>
+              <progress id="signing-key-progress" class="hidden hash-progress"></progress>
+              <div class="button-group">
+                <button id="signing-key-save-secret" class="secondary" type="button" disabled>Save Private Key (.pqse)</button>
+                <button id="signing-key-save-public" class="secondary" type="button" disabled>Save Public Key (.pqpk)</button>
+                <button id="signing-key-lock" class="secondary" type="button" disabled>Lock</button>
+              </div>
+              <div id="signing-key-info" class="mono-box keys-info-box">No signing key unlocked.</div>
+            </div>
+
+            <div class="card full-width">
+              <h3>Verification key</h3>
               <p class="muted-copy">Obtain the public key or its full fingerprint from the signer through a trusted channel.</p>
               <div class="form-group">
                 <label for="keys-import-public">Public Key (.pqpk)</label>
@@ -100,17 +130,64 @@
         </section>
 
         <section id="tab-sign" class="tab-panel module-panel module-sign">
-          <header class="section-header"><h2>Sign Locally</h2></header>
-          <div class="panel-grid"><div class="card full-width">
-            <p>Generate keys and sign files with the local Node.js 26+ command line tool. Private keys and passphrases stay out of this browser.</p>
-            <p>From your verified copy of the source repository:</p>
-            <pre class="mono-box">node src/native/cli.mjs keygen --secret signer.pqse --public signer.pqpk
+          <header class="section-header">
+            <h2>Sign Detached</h2>
+            <p class="muted-copy">Select a file or plain text, review its digest and the signer, then sign. The .qsig does not include the filename or time.</p>
+          </header>
+
+          <div class="panel-grid">
+            <div class="card full-width">
+              <div class="form-group">
+                <label>Input Type</label>
+                <div class="radio-row">
+                  <label class="radio-inline"><input id="sign-mode-file" type="radio" name="sign-input-mode" value="file" checked /> File</label>
+                  <label class="radio-inline"><input id="sign-mode-text" type="radio" name="sign-input-mode" value="text" /> Plain Text</label>
+                </div>
+              </div>
+
+              <div class="form-group">
+                <div id="sign-file-group">
+                  <label for="sign-file">File to sign</label>
+                  <input id="sign-file" type="file" />
+                </div>
+                <div id="sign-text-group" class="hidden">
+                  <div class="row-between">
+                    <label for="sign-text" class="no-bottom">Plain text to sign</label>
+                    <button id="sign-text-paste" class="secondary small" type="button">Paste</button>
+                  </div>
+                  <textarea id="sign-text" rows="8" placeholder="Paste text here"></textarea>
+                </div>
+              </div>
+
+              <progress id="sign-progress" value="0" max="100" class="hidden hash-progress"></progress>
+              <div id="sign-progress-label" class="progress-label"></div>
+
+              <div class="review-panel" aria-live="polite">
+                <div class="review-head">
+                  <h3>Review Before Signing</h3>
+                  <span id="sign-review-badge" class="badge neutral">WAITING</span>
+                </div>
+                <p class="muted-copy review-copy">Only this exact digest will be signed, with this key.</p>
+                <div id="sign-review" class="mono-box review-box">Select input and unlock a signing key.</div>
+              </div>
+
+              <div class="button-group">
+                <button id="sign-execute" class="primary" type="button" disabled>Sign</button>
+                <button id="sign-download" class="secondary" type="button" disabled>Save Signature (.qsig)</button>
+                <button id="sign-reset" class="secondary" type="button">Reset</button>
+              </div>
+              <div id="sign-result" class="mono-box sign-result">No signature created yet.</div>
+            </div>
+
+            <details class="card full-width diagnostics-panel">
+              <summary class="diagnostics-summary">Command line alternative</summary>
+              <p>The same key files and signatures work with the local Node.js 26+ tool (OpenSSL). From a verified copy of the source:</p>
+              <pre class="mono-box">node src/native/cli.mjs keygen --secret signer.pqse --public signer.pqpk
 node src/native/cli.mjs hash --file document.bin
 node src/native/cli.mjs sign --secret signer.pqse --file document.bin --expect-sha3-512 REVIEWED_DIGEST --out document.qsig</pre>
-            <p>Replace REVIEWED_DIGEST with the SHA3-512 digest you reviewed. Passwords are prompted without echo. Existing files are never overwritten.</p>
-            <p>Use <code>node src/native/cli.mjs help</code> for all options. Keep the encrypted .pqse key backed up securely; share only .pqpk and .qsig files.</p>
-            <p class="muted-copy">Local signing uses Node's OpenSSL provider. This project has not established FIPS module validation. Authenticate the downloaded source or release before using it.</p>
-          </div></div>
+              <p class="muted-copy">Neither implementation has FIPS module validation. Authenticate the downloaded source or release before use.</p>
+            </details>
+          </div>
         </section>
 
         <section id="tab-verify" class="tab-panel module-panel module-verify">

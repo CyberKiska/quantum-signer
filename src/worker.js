@@ -43,7 +43,7 @@ self.onmessage = async (event) => {
       throw createError(ErrorCode.E_WORKER_PROTOCOL, { reason: 'unsupported_request' });
     }
     if (!healthy) throw createError(ErrorCode.E_INTERNAL);
-    if (busy) throw createError(ErrorCode.E_WORKER_PROTOCOL, { reason: 'worker_busy' });
+    if (busy) throw createError(ErrorCode.E_WORKER_BUSY);
     busy = true; ownsRequest = true;
     const result = await Handlers[type](id, request.payload || {});
     postMessage({ id, type: 'RESULT', op: type, ok: true, result });

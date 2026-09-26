@@ -513,6 +513,7 @@ button:disabled {
   padding: 0.9rem;
   overflow-x: auto;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: #2d3748;
 }
 
@@ -726,6 +727,10 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 1.5rem;
+}
+
+.spaced-label {
+  margin-top: 0.9rem;
 }
 
 .keys-info-box {
